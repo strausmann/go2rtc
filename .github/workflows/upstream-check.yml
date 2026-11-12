@@ -1,0 +1,152 @@
+name: Upstream check
+
+# Checks once a day whether AlexxIT/go2rtc has new commits and whether they
+# merge into the doorbridge branch with a green gate. It never pushes: the
+# token is read-only for contents, and scripts/doorbridge/sync.sh never pushes
+# by design. Pulling upstream in happens on request, locally (see DOORBRIDGE.md).
+on:
+  schedule:
+    - cron: '30 3 * * *'   # daily at 03:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check upstream
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/doorbridge'
+    steps:
+      # sync.sh needs the full history to find the merge base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run sync gate (no push)
+        id: sync
+        env:
+          SYNC_OUT_DIR: ${{ runner.temp }}/sync-out
+        run: |
+          set -u
+          git config user.name "upstream-check"
+          git config user.email "upstream-check@users.noreply.github.com"
+          git remote add upstream https://github.com/AlexxIT/go2rtc.git
+          before="$(git rev-parse HEAD)"
+          rc=0
+          bash scripts/doorbridge/sync.sh doorbridge || rc=$?
+          echo "sync.sh exit code: $rc"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          mkdir -p "$SYNC_OUT_DIR"
+          git log --format='- %h %s' "$before..upstream/master" > "$SYNC_OUT_DIR/commits.txt" 2>/dev/null || true
+          case "$rc" in
+            0|10|20|30) exit 0 ;;
+            *) echo "::error::sync.sh failed with exit code $rc (usage or environment error)"; exit 1 ;;
+          esac
+
+      - name: Update issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_OUT_DIR: ${{ runner.temp }}/sync-out
+          RC: ${{ steps.sync.outputs.rc }}
+        run: |
+          set -eu
+          T_READY='Upstream has new commits – sync ready'
+          T_CONFLICT='Upstream sync blocked: merge conflict'
+          T_FAIL='Upstream sync blocked: new test failures'
+
+          # open_number <title>: number of the open issue with exactly this title, or empty.
+          open_number() {
+            gh issue list --state open --limit 100 --json number,title \
+              | jq -r --arg t "$1" '.[] | select(.title == $t) | .number' | head -n1
+          }
+
+          # report <title> <body-file>: comment on the open issue, or open a new one.
+          report() {
+            local n
+            n="$(open_number "$1")"
+            if [ -n "$n" ]; then
+              gh issue comment "$n" --body-file "$2"
+            else
+              gh issue create --title "$1" --body-file "$2"
+            fi
+          }
+
+          # close_open <title>: close the open issue with this title, if any.
+          close_open() {
+            local n
+            n="$(open_number "$1")"
+            if [ -n "$n" ]; then
+              gh issue close "$n" --comment "The upstream state is clean again (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            fi
+          }
+
+          body="$RUNNER_TEMP/issue-body.md"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          case "$RC" in
+            10)
+              close_open "$T_READY"; close_open "$T_CONFLICT"; close_open "$T_FAIL"
+              ;;
+            0)
+              close_open "$T_CONFLICT"; close_open "$T_FAIL"
+              {
+                echo "Upstream has new commits that merge cleanly into \`doorbridge\` with a green test gate."
+                echo
+                echo "Commits (\`doorbridge..upstream/master\`):"
+                echo
+                cat "$SYNC_OUT_DIR/commits.txt"
+                echo
+                echo "To pull them in, run \`scripts/doorbridge/sync.sh doorbridge\` locally and push (see DOORBRIDGE.md)."
+                echo
+                echo "Run: $run_url"
+              } > "$body"
+              report "$T_READY" "$body"
+              ;;
+            20)
+              {
+                echo "The merge of \`upstream/master\` into \`doorbridge\` has conflicts."
+                echo
+                echo "Conflicting files:"
+                echo
+                echo '```'
+                cat "$SYNC_OUT_DIR/conflicts.txt"
+                echo '```'
+                echo
+                echo "Upstream commits:"
+                echo
+                cat "$SYNC_OUT_DIR/commits.txt"
+                echo
+                echo "Run: $run_url"
+              } > "$body"
+              report "$T_CONFLICT" "$body"
+              ;;
+            30)
+              {
+                echo "The merge of \`upstream/master\` into \`doorbridge\` introduces new test failures (compared with unmodified upstream)."
+                echo
+                echo "New failures:"
+                echo
+                echo '```'
+                cat "$SYNC_OUT_DIR/new-failures.txt"
+                echo '```'
+                echo
+                echo "Upstream commits:"
+                echo
+                cat "$SYNC_OUT_DIR/commits.txt"
+                echo
+                echo "Run: $run_url"
+              } > "$body"
+              report "$T_FAIL" "$body"
+              ;;
+          esac
