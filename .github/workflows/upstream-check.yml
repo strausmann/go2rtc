@@ -112,7 +112,7 @@ jobs:
 
           # open_number <title>: number of the open issue with exactly this title, or empty.
           open_number() {
-            gh issue list --state open --limit 100 --json number,title \
+            gh issue list --state open --author app/github-actions --limit 100 --json number,title \
               | jq -r --arg t "$1" '.[] | select(.title == $t) | .number' | head -n1
           }
 
@@ -132,13 +132,16 @@ jobs:
             local n
             n="$(open_number "$1")"
             if [ -n "$n" ]; then
-              gh issue close "$n" --comment "The upstream state is clean again (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+              gh issue close "$n" --comment "The upstream state changed; this issue is superseded (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
             fi
           }
 
           body="$RUNNER_TEMP/issue-body.md"
           # cap: file contents come from an untrusted job
-          cap() { [ -f "$1" ] && head -c 20000 "$1" || true; }
+          # Backticks are stripped so content cannot close the code fence it is put in.
+          cap() { [ -f "$1" ] && head -c 20000 "$1" | tr -d '`' || true; }
+          # fenced <file>: contents in a code fence (no @mentions, no markdown from upstream).
+          fenced() { echo '```'; cap "$1"; echo '```'; }
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
           case "$rc" in
@@ -152,7 +155,7 @@ jobs:
                 echo
                 echo "Commits (\`doorbridge..upstream/master\`):"
                 echo
-                cap "$RESULT_DIR/commits.txt"
+                fenced "$RESULT_DIR/commits.txt"
                 echo
                 echo "To pull them in, run \`scripts/doorbridge/sync.sh doorbridge\` locally and push (see DOORBRIDGE.md)."
                 echo
@@ -161,6 +164,7 @@ jobs:
               report "$T_READY" "$body"
               ;;
             20)
+              close_open "$T_READY"
               {
                 echo "The merge of \`upstream/master\` into \`doorbridge\` has conflicts."
                 echo
@@ -172,13 +176,14 @@ jobs:
                 echo
                 echo "Upstream commits:"
                 echo
-                cap "$RESULT_DIR/commits.txt"
+                fenced "$RESULT_DIR/commits.txt"
                 echo
                 echo "Run: $run_url"
               } > "$body"
               report "$T_CONFLICT" "$body"
               ;;
             30)
+              close_open "$T_READY"
               {
                 echo "The merge of \`upstream/master\` into \`doorbridge\` introduces new test failures (compared with unmodified upstream)."
                 echo
@@ -190,7 +195,7 @@ jobs:
                 echo
                 echo "Upstream commits:"
                 echo
-                cap "$RESULT_DIR/commits.txt"
+                fenced "$RESULT_DIR/commits.txt"
                 echo
                 echo "Run: $run_url"
               } > "$body"
