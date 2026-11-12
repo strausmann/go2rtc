@@ -1,9 +1,10 @@
 # Doorbridge fork
 
-This fork of [AlexxIT/go2rtc](https://github.com/AlexxIT/go2rtc) exists for one reason: it carries
-the UniFi Protect talkback source from upstream pull request
+This fork of [AlexxIT/go2rtc](https://github.com/AlexxIT/go2rtc) exists to carry changes that are not
+yet available in an upstream release: the UniFi Protect talkback source from upstream pull request
 [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) (Opus talkback to UniFi Protect
-cameras and doorbells) before that change is available in an upstream release.
+cameras and doorbells), another upstream pull request, and a few additions of its own (see
+[Fork additions](#fork-additions)).
 
 ## Carried upstream pull requests
 
@@ -11,6 +12,58 @@ cameras and doorbells) before that change is available in an upstream release.
 |---|---|
 | [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
 | [AlexxIT/go2rtc#2486](https://github.com/AlexxIT/go2rtc/pull/2486) | Read RTCP feedback from WebRTC senders so pion's NACK responder can retransmit lost packets |
+
+## Fork additions
+
+Changes that exist only in this fork.
+
+| Addition | Purpose |
+|---|---|
+| NACK limiter ([fork PR #4](https://github.com/strausmann/go2rtc/pull/4)) | Bounds NACK retransmission requests per WebRTC sender |
+| Keyframe on viewer request ([fork issue #5](https://github.com/strausmann/go2rtc/issues/5)) | Gets a fresh keyframe from a UniFi Protect camera when a WebRTC viewer asks for one |
+
+### Keyframe on viewer request
+
+**Purpose.** UniFi Protect ignores PLI and FIR and emits a keyframe only every GOP (about 5 s). A
+viewer that joins or loses a frame therefore waits for the next GOP. Protect does emit a keyframe
+when a new RTSP session sets up a video track, so go2rtc triggers that on demand.
+
+**Configuration.** Opt-in per source, off by default:
+
+```yaml
+streams:
+  doorbell: rtspx://protect-host:7441/camera-token#keyframe=resetup
+```
+
+Any other value logs a warning and leaves the feature off; the main stream is unaffected. Only
+`rtsp://`, `rtsps://` and `rtspx://` sources support it; other producers ignore the request.
+
+**Behaviour.** The WebRTC sender watches RTCP feedback for PLI and FIR. A request for a video track
+is forwarded to the producer's current connection, which opens a short helper session to the same
+URL: OPTIONS, DESCRIBE, SETUP of the first video media, TEARDOWN. There is no PLAY, no redirect
+following, and the helper always uses TCP-interleaved transport, even with `#transport=udp`.
+
+- At most one helper session per second per source, shared by all viewers; requests inside the
+  window are dropped, not queued.
+- Never two helper sessions at the same time.
+- The helper session has the same dial timeout as the main source and an overall 2 s deadline.
+- Failures never affect the main stream. They are logged at debug level only, as stage and error
+  class, without URL, host or token.
+
+The same change also bounds the TLS handshake by the dial timeout, which hardens the main
+connection too, and keeps the RTCP read loop alive across a single unparsable packet (it ends on
+read end or after 64 consecutive errors).
+
+**Limits.**
+
+- This relies on undocumented Protect behaviour, measured on a doorbell: an extra SETUP makes the
+  shared encoder emit a keyframe within roughly 0.03 to 0.2 s. Because the encoder is shared, the
+  keyframe reaches all sessions and presumably the recording too. A firmware update may make the
+  trick ineffective; that is harmless, viewers then wait for the next GOP as before.
+- Tracks renegotiated after the first connect get no keyframe forwarding (pre-existing behaviour
+  of the RTCP reader, which attaches once per connection).
+
+**Rollback.** Remove `#keyframe=resetup` from the source URL.
 
 ## Branch model
 
@@ -65,14 +118,17 @@ Consumers should pin the `doorbridge-<sha7>` tag.
 
 ## Pull request tests
 
-`doorbridge-test.yml` runs the WebRTC tests (`pkg/webrtc`, `internal/webrtc`) on pull requests
-against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
-32-bit platforms upstream builds. It builds no images, pushes nothing and uses no Go cache.
+`doorbridge-test.yml` runs the WebRTC and RTSP tests (`pkg/webrtc`, `internal/webrtc`, `pkg/rtsp`,
+`internal/rtsp`) and the keyframe forwarding tests (`-run Keyframe` in `internal/streams`) on pull
+requests against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
+32-bit platforms upstream builds. The package selections skip pre-existing failures (`pkg/core`
+tests, two tests in `internal/streams`) so that the gate only turns red for real defects. It builds no images, pushes nothing and uses no Go cache.
 
 ## Exit condition
 
-This fork is temporary. Once the talkback source from PR #2340 (or an equivalent) is part of an
-upstream go2rtc release, switch consumers to the upstream image and archive this fork.
+This fork is temporary. Switch consumers to the upstream image and archive this fork only when the
+talkback source from PR #2340 (or an equivalent) is part of an upstream go2rtc release **and** the
+fork additions are either upstream as well or no longer needed.
 
 ## Security of the upstream check
 
