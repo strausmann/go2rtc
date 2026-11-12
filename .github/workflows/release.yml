@@ -119,5 +119,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=doorbridge-${{ steps.tag.outputs.sha7 }}
             org.opencontainers.image.licenses=MIT
-          cache-from: type=gha,scope=doorbridge-release
-          cache-to: type=gha,mode=max,scope=doorbridge-release
+          # No build cache: the GHA cache is writable from any job on this ref (including
+          # the unvetted upstream check), so a published image must not depend on it.
+          no-cache: true

@@ -66,4 +66,4 @@ upstream go2rtc release, switch consumers to the upstream image and archive this
 The check merges and tests upstream code that has not been vetted yet. It therefore runs in a job
 with no token permissions and no Go cache, and only writes plain data files (exit code, commit list,
 conflicts, failures). A separate job holding `issues: write` downloads those files, validates the
-exit code, and passes the contents to `gh` as issue bodies only. It checks out and executes nothing.
+exit code, and passes the contents to `gh` as issue bodies only. It checks out and executes nothing. Release builds run without any build cache for the same reason: the GitHub Actions cache is writable from any job on the same ref, so a published image must not depend on it.
