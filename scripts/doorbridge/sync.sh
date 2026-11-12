@@ -38,8 +38,14 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 2
 fi
 
-git fetch --quiet upstream "+refs/heads/$UPSTREAM_BRANCH:refs/remotes/$UP"
-git checkout --quiet "$TARGET"
+if ! git fetch --quiet upstream "+refs/heads/$UPSTREAM_BRANCH:refs/remotes/$UP"; then
+  echo "sync: git fetch from remote 'upstream' failed" >&2
+  exit 2
+fi
+if ! git checkout --quiet "$TARGET"; then
+  echo "sync: cannot check out target branch '$TARGET'" >&2
+  exit 2
+fi
 
 # is-ancestor: 0 = yes, 1 = no, anything else = real error.
 rc=0
@@ -53,21 +59,41 @@ esac
 ORIG="$(git rev-parse HEAD)"
 WORK="$(mktemp -d)"
 BASE_TREE="$WORK/base"
+MERGED=0
+
+# Only exit 0 may keep the merge. Every other exit code (including an unexpected
+# `set -e` death after the merge) rolls back to the pre-merge commit.
 cleanup() {
+  local rc=$?
+  trap - EXIT
+  if [ "$MERGED" = 1 ] && [ "$rc" -ne 0 ]; then
+    git reset --hard --quiet "$ORIG" || echo "sync: ROLLBACK FAILED, reset to $ORIG manually" >&2
+  fi
   git worktree remove --force "$BASE_TREE" >/dev/null 2>&1 || true
   rm -rf "$WORK"
+  exit "$rc"
 }
 trap cleanup EXIT
 
-# Merge. A conflict makes git exit non-zero; handle it, do not abort the script.
+# Merge. A failing merge is either a content conflict (MERGE_HEAD exists or there are
+# unmerged files) or something else (unrelated histories, no merge base in a shallow
+# clone, untracked files in the way). Only the first is exit 20.
 mrc=0
 git merge --no-ff --quiet -m "Merge $UP into $TARGET" "$UP" >"$WORK/merge.log" 2>&1 || mrc=$?
 if [ "$mrc" -ne 0 ]; then
-  git diff --name-only --diff-filter=U >"$OUT_DIR/conflicts.txt"
-  git merge --abort
-  echo "sync: merge conflict, see $OUT_DIR/conflicts.txt" >&2
-  exit 20
+  unmerged="$(git diff --name-only --diff-filter=U)"
+  if [ -e "$(git rev-parse --git-path MERGE_HEAD)" ] || [ -n "$unmerged" ]; then
+    printf '%s\n' "$unmerged" >"$OUT_DIR/conflicts.txt"
+    git merge --abort
+    echo "sync: merge conflict, see $OUT_DIR/conflicts.txt" >&2
+    exit 20
+  fi
+  echo "sync: merge failed without conflict (exit $mrc):" >&2
+  cat "$WORK/merge.log" >&2
+  echo "sync: a shallow clone has no merge base; fetch full history (fetch-depth 0)" >&2
+  exit 2
 fi
+MERGED=1
 
 # run_tests <dir> <out>: go test exits 1 on any test failure; that is data here.
 # An empty result would look like "no failures", so it is an error.
@@ -80,13 +106,17 @@ run_tests() {
     return 1
   fi
   bash "$HERE/failed-tests.sh" <"$WORK/raw.json" >"$out"
+  # Non-zero exit with no parsed failure means a failure that never reached the
+  # JSON (load error, toolchain problem). That must not count as green.
+  if [ "$trc" -ne 0 ] && [ ! -s "$out" ]; then
+    echo "sync: go test exited $trc but no failure was parsed from its output" >&2
+    cat "$WORK/go-stderr.txt" >&2
+    return 1
+  fi
 }
-
-rollback() { git reset --hard --quiet "$ORIG"; }
 
 git worktree add --quiet --detach "$BASE_TREE" "$UP"
 if ! run_tests "$BASE_TREE" "$WORK/base.txt" || ! run_tests "$PWD" "$WORK/head.txt"; then
-  rollback
   exit 2
 fi
 
@@ -94,6 +124,6 @@ nrc=0
 bash "$HERE/new-failures.sh" "$WORK/base.txt" "$WORK/head.txt" >"$OUT_DIR/new-failures.txt" || nrc=$?
 case "$nrc" in
   0) rm -f "$OUT_DIR/new-failures.txt"; echo "sync: merged $UP into $TARGET, gate green"; exit 0 ;;
-  1) rollback; echo "sync: new test failures, see $OUT_DIR/new-failures.txt" >&2; exit 30 ;;
-  *) rollback; echo "sync: new-failures.sh failed (exit $nrc)" >&2; exit 2 ;;
+  1) echo "sync: new test failures, see $OUT_DIR/new-failures.txt" >&2; exit 30 ;;
+  *) echo "sync: new-failures.sh failed (exit $nrc)" >&2; exit 2 ;;
 esac

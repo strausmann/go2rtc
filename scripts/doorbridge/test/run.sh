@@ -54,6 +54,12 @@ rc=0; out="$(bash "$SCRIPTS/new-failures.sh" "$TMP/base.txt" "$TMP/head-fewer.tx
 expect_eq "new-failures: one failure fewer -> exit 0" "0" "$rc"
 expect_eq "new-failures: one failure fewer -> no output" "" "$out"
 
+# A missing/unreadable input must not look like "no failures".
+rc=0; bash "$SCRIPTS/new-failures.sh" "$TMP/base.txt" "$TMP/does-not-exist.txt" >/dev/null 2>&1 || rc=$?
+expect_eq "new-failures: missing head file -> exit 2" "2" "$rc"
+rc=0; bash "$SCRIPTS/new-failures.sh" "$TMP/does-not-exist.txt" "$TMP/head-extra.txt" >/dev/null 2>&1 || rc=$?
+expect_eq "new-failures: missing base file -> exit 2" "2" "$rc"
+
 # ---------------------------------------------------------------- sync.sh
 # Repo layout per case:
 #   $W/upstream.git  bare repo, branch master
@@ -96,9 +102,9 @@ clone_repo() { # branches "target" from the current upstream master
   git -C "$REPO" checkout -q -b target
 }
 
-run_sync() { # prints exit code of sync.sh; files go to $OUT
+run_sync() { # [target] [shim-dir]; prints exit code of sync.sh; files go to $OUT
   local rc=0
-  (cd "$REPO" && SYNC_OUT_DIR="$OUT" bash "$SCRIPTS/sync.sh" target >"$OUT/log.txt" 2>&1) || rc=$?
+  (cd "$REPO" && PATH="${2:+$2:}$PATH" SYNC_OUT_DIR="$OUT" bash "$SCRIPTS/sync.sh" "${1:-target}" >"$OUT/log.txt" 2>&1) || rc=$?
   echo "$rc"
 }
 
@@ -163,6 +169,74 @@ rc="$(run_sync)"
 expect_eq "sync (d): new test failure -> exit 30" "30" "$rc"
 expect_eq "sync (d): new-failures.txt lists exactly the new test" "example.invalid/tiny TestTargetNeedsOne" "$(cat "$OUT/new-failures.txt" 2>/dev/null || true)"
 expect_eq "sync (d): merge is rolled back" "$before" "$(git -C "$REPO" rev-parse HEAD)"
+
+# (e) merge fails without a content conflict (unrelated histories) -> exit 2, nothing changed
+new_case e; clone_repo
+git -C "$REPO" checkout -q --orphan target-orphan
+git -C "$REPO" rm -rq -f . && printf 'x\n' > "$REPO/own.txt"
+git -C "$REPO" add -- own.txt && git -C "$REPO" commit -q -m "orphan"
+git -C "$REPO" branch -q -m target-orphan target-e
+commit_file "$SEED" docs.txt "upstream change" "upstream: new file"
+git -C "$SEED" push -q origin master
+before="$(git -C "$REPO" rev-parse HEAD)"
+rc="$(run_sync target-e)"
+expect_eq "sync (e): merge failure without conflict -> exit 2" "2" "$rc"
+expect_eq "sync (e): working tree clean" "" "$(git -C "$REPO" status --porcelain)"
+expect_eq "sync (e): HEAD unchanged" "$before" "$(git -C "$REPO" rev-parse HEAD)"
+expect_eq "sync (e): git's reason is shown" "1" "$(grep -c 'unrelated histories' "$OUT/log.txt" || true)"
+
+# (f) unexpected failure AFTER the merge (git worktree add fails) -> HEAD back to pre-merge
+new_case f; clone_repo
+commit_file "$REPO" target.txt "target change" "target: own commit"
+commit_file "$SEED" docs.txt "upstream change" "upstream: new file"
+git -C "$SEED" push -q origin master
+REALGIT="$(command -v git)"
+mkdir -p "$W/shim"
+cat > "$W/shim/git" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = worktree ] && [ "\${2:-}" = add ]; then exit 99; fi
+exec "$REALGIT" "\$@"
+SH
+chmod +x "$W/shim/git"
+before="$(git -C "$REPO" rev-parse HEAD)"
+rc="$(run_sync target "$W/shim")"
+expect_eq "sync (f): failure after merge -> non-zero exit" "1" "$([ "$rc" != 0 ] && echo 1 || echo 0)"
+expect_eq "sync (f): HEAD rolled back to pre-merge" "$before" "$(git -C "$REPO" rev-parse HEAD)"
+expect_eq "sync (f): working tree clean" "" "$(git -C "$REPO" status --porcelain)"
+
+# (g) missing target branch -> exit 2
+new_case g; clone_repo
+commit_file "$SEED" docs.txt "upstream change" "upstream: new file"
+git -C "$SEED" push -q origin master
+rc="$(run_sync no-such-branch)"
+expect_eq "sync (g): missing target branch -> exit 2" "2" "$rc"
+
+# (h) fetch fails (remote gone) -> exit 2
+new_case h; clone_repo
+git -C "$REPO" remote set-url upstream "$W/does-not-exist.git"
+rc="$(run_sync)"
+expect_eq "sync (h): fetch failure -> exit 2" "2" "$rc"
+
+# (i) go test exits non-zero but its JSON holds no failure -> exit 2, merge rolled back
+new_case i; clone_repo
+commit_file "$REPO" target.txt "target change" "target: own commit"
+commit_file "$SEED" docs.txt "upstream change" "upstream: new file"
+git -C "$SEED" push -q origin master
+REALGO="$(command -v go)"
+mkdir -p "$W/shim"
+cat > "$W/shim/go" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = test ]; then
+  echo '{"Action":"pass","Package":"p/x"}'
+  exit 1
+fi
+exec "$REALGO" "\$@"
+SH
+chmod +x "$W/shim/go"
+before="$(git -C "$REPO" rev-parse HEAD)"
+rc="$(run_sync target "$W/shim")"
+expect_eq "sync (i): go test failed without parsed failure -> exit 2" "2" "$rc"
+expect_eq "sync (i): HEAD rolled back" "$before" "$(git -C "$REPO" rev-parse HEAD)"
 
 echo
 echo "passed: $PASS  failed: $FAIL"
