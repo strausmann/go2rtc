@@ -60,3 +60,10 @@ Consumers should pin the `doorbridge-<sha7>` tag.
 
 This fork is temporary. Once the talkback source from PR #2340 (or an equivalent) is part of an
 upstream go2rtc release, switch consumers to the upstream image and archive this fork.
+
+## Security of the upstream check
+
+The check merges and tests upstream code that has not been vetted yet. It therefore runs in a job
+with no token permissions and no Go cache, and only writes plain data files (exit code, commit list,
+conflicts, failures). A separate job holding `issues: write` downloads those files, validates the
+exit code, and passes the contents to `gh` as issue bodies only. It checks out and executes nothing.

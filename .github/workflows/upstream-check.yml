@@ -1,5 +1,10 @@
 name: Upstream check
 
+# Two jobs on purpose. "check" runs code that is not vetted yet (go test on
+# upstream commits) and therefore has no token rights at all; it only writes data
+# files. "report" holds the issues:write token, checks out and executes nothing,
+# and treats the artifact strictly as data.
+#
 # Checks once a day whether AlexxIT/go2rtc has new commits and whether they
 # merge into the doorbridge branch with a green gate. It never pushes: the
 # token is read-only for contents, and scripts/doorbridge/sync.sh never pushes
@@ -9,9 +14,7 @@ on:
     - cron: '30 3 * * *'   # daily at 03:30 UTC
   workflow_dispatch:
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 concurrency:
   group: upstream-check
@@ -22,6 +25,7 @@ jobs:
     name: Check upstream
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/doorbridge'
+    permissions: {}
     steps:
       # sync.sh needs the full history to find the merge base.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -29,12 +33,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # No cache: the Go cache scope is shared with other workflows and this
+      # job runs unvetted code.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Run sync gate (no push)
-        id: sync
         env:
           SYNC_OUT_DIR: ${{ runner.temp }}/sync-out
         run: |
@@ -42,25 +48,64 @@ jobs:
           git config user.name "upstream-check"
           git config user.email "upstream-check@users.noreply.github.com"
           git remote add upstream https://github.com/AlexxIT/go2rtc.git
+          mkdir -p "$SYNC_OUT_DIR"
           before="$(git rev-parse HEAD)"
           rc=0
           bash scripts/doorbridge/sync.sh doorbridge || rc=$?
           echo "sync.sh exit code: $rc"
-          echo "rc=$rc" >> "$GITHUB_OUTPUT"
-          mkdir -p "$SYNC_OUT_DIR"
+          # Data files only; the report job reads them as plain text.
+          printf '%s\n' "$rc" > "$SYNC_OUT_DIR/rc.txt"
           git log --format='- %h %s' "$before..upstream/master" > "$SYNC_OUT_DIR/commits.txt" 2>/dev/null || true
           case "$rc" in
             0|10|20|30) exit 0 ;;
             *) echo "::error::sync.sh failed with exit code $rc (usage or environment error)"; exit 1 ;;
           esac
 
+      - name: Upload result data
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: upstream-check-result
+          path: |
+            ${{ runner.temp }}/sync-out/rc.txt
+            ${{ runner.temp }}/sync-out/commits.txt
+            ${{ runner.temp }}/sync-out/conflicts.txt
+            ${{ runner.temp }}/sync-out/new-failures.txt
+          retention-days: 3
+          if-no-files-found: ignore
+
+  report:
+    name: Report to issues
+    needs: check
+    if: always() && needs.check.result != 'skipped'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      # No checkout, no setup-go, nothing from the repo or the artifact is executed.
+      - name: Download result data
+        id: dl
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: upstream-check-result
+          path: ${{ runner.temp }}/result
+
       - name: Update issues
+        if: steps.dl.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-          SYNC_OUT_DIR: ${{ runner.temp }}/sync-out
-          RC: ${{ steps.sync.outputs.rc }}
+          GH_REPO: ${{ github.repository }}
+          RESULT_DIR: ${{ runner.temp }}/result
         run: |
           set -eu
+          # Files are data. rc must be one of the known integers.
+          rc="$(head -c 16 "$RESULT_DIR/rc.txt" 2>/dev/null | tr -d '[:space:]' || true)"
+          if ! printf '%s' "$rc" | grep -Eq '^(0|10|20|30|2)$'; then
+            echo "::error::rc.txt missing or invalid"
+            exit 1
+          fi
+
           T_READY='Upstream has new commits – sync ready'
           T_CONFLICT='Upstream sync blocked: merge conflict'
           T_FAIL='Upstream sync blocked: new test failures'
@@ -92,9 +137,11 @@ jobs:
           }
 
           body="$RUNNER_TEMP/issue-body.md"
+          # cap: file contents come from an untrusted job
+          cap() { [ -f "$1" ] && head -c 20000 "$1" || true; }
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-          case "$RC" in
+          case "$rc" in
             10)
               close_open "$T_READY"; close_open "$T_CONFLICT"; close_open "$T_FAIL"
               ;;
@@ -105,7 +152,7 @@ jobs:
                 echo
                 echo "Commits (\`doorbridge..upstream/master\`):"
                 echo
-                cat "$SYNC_OUT_DIR/commits.txt"
+                cap "$RESULT_DIR/commits.txt"
                 echo
                 echo "To pull them in, run \`scripts/doorbridge/sync.sh doorbridge\` locally and push (see DOORBRIDGE.md)."
                 echo
@@ -120,12 +167,12 @@ jobs:
                 echo "Conflicting files:"
                 echo
                 echo '```'
-                cat "$SYNC_OUT_DIR/conflicts.txt"
+                cap "$RESULT_DIR/conflicts.txt"
                 echo '```'
                 echo
                 echo "Upstream commits:"
                 echo
-                cat "$SYNC_OUT_DIR/commits.txt"
+                cap "$RESULT_DIR/commits.txt"
                 echo
                 echo "Run: $run_url"
               } > "$body"
@@ -138,12 +185,12 @@ jobs:
                 echo "New failures:"
                 echo
                 echo '```'
-                cat "$SYNC_OUT_DIR/new-failures.txt"
+                cap "$RESULT_DIR/new-failures.txt"
                 echo '```'
                 echo
                 echo "Upstream commits:"
                 echo
-                cat "$SYNC_OUT_DIR/commits.txt"
+                cap "$RESULT_DIR/commits.txt"
                 echo
                 echo "Run: $run_url"
               } > "$body"

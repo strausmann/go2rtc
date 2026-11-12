@@ -119,5 +119,5 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=doorbridge-${{ steps.tag.outputs.sha7 }}
             org.opencontainers.image.licenses=MIT
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=doorbridge-release
+          cache-to: type=gha,mode=max,scope=doorbridge-release
