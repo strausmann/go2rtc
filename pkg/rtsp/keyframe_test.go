@@ -297,8 +297,14 @@ func newSetupConn(t *testing.T, srv *fakeRTSPServer) *Conn {
 // newPlayingConn returns a connection in state PLAY with its read loop running.
 func newPlayingConn(t *testing.T, srv *fakeRTSPServer) *Conn {
 	t.Helper()
-
 	c := newSetupConn(t, srv)
+	startPlaying(t, srv, c)
+	return c
+}
+
+// startPlaying runs Start of a connection from newSetupConn and waits for PLAY.
+func startPlaying(t *testing.T, srv *fakeRTSPServer, c *Conn) {
+	t.Helper()
 
 	done := make(chan struct{})
 	go func() {
@@ -314,8 +320,6 @@ func newPlayingConn(t *testing.T, srv *fakeRTSPServer) *Conn {
 		return c.state == StatePlay
 	}, 2*time.Second, 5*time.Millisecond)
 	require.Eventually(t, func() bool { return srv.count(MethodPlay) == 1 }, 2*time.Second, 5*time.Millisecond)
-
-	return c
 }
 
 var playing sync.Map // *Conn -> chan struct{} closed when Start returned
@@ -618,4 +622,129 @@ func TestStopCancelsKeyframeHelper(t *testing.T) {
 	require.ErrorIs(t, c.RequestKeyframe(), ErrKeyframeClosed)
 	time.Sleep(100 * time.Millisecond)
 	require.Equal(t, accepted, srv.acceptedConns())
+}
+
+func TestRequestKeyframeDoesNotBlockOnKeyframeLock(t *testing.T) {
+	withKeyframeGlobals(t, time.Second, 2*time.Second)
+	srv := newFakeRTSPServer(t)
+	c := newPlayingConn(t, srv)
+
+	c.kfMu.Lock()
+	result := make(chan error, 1)
+	go func() { result <- c.RequestKeyframe() }()
+
+	select {
+	case err := <-result:
+		c.kfMu.Unlock()
+		require.ErrorIs(t, err, ErrKeyframeBusy)
+	case <-time.After(50 * time.Millisecond):
+		c.kfMu.Unlock()
+		<-result
+		t.Fatal("RequestKeyframe blocked on the keyframe lock")
+	}
+}
+
+// blockingConn is a net.Conn whose first Close blocks until released,
+// like a *tls.Conn sending close_notify to a peer that does not read.
+type blockingConn struct {
+	net.Conn
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingConn) Close() error {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return nil
+}
+
+func TestStopKeyframeClosesOutsideLock(t *testing.T) {
+	withKeyframeGlobals(t, time.Second, 2*time.Second)
+	srv := newFakeRTSPServer(t)
+	c := newPlayingConn(t, srv)
+
+	raw := &blockingConn{entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(raw.release) })
+
+	c.kfMu.Lock()
+	c.kfRaw = raw
+	c.kfMu.Unlock()
+
+	go c.stopKeyframe()
+	select {
+	case <-raw.entered:
+	case <-time.After(time.Second):
+		t.Fatal("stopKeyframe did not close the helper connection")
+	}
+
+	// Close is still blocked: a request must neither wait nor see the lock taken
+	result := make(chan error, 1)
+	go func() { result <- c.RequestKeyframe() }()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, ErrKeyframeClosed)
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("RequestKeyframe blocked while the helper connection was closing")
+	}
+}
+
+func TestStopEndsKeyframeHelperInTLSHandshake(t *testing.T) {
+	withKeyframeGlobals(t, time.Second, 2*time.Second)
+	srv := newFakeRTSPServer(t)
+	c := newSetupConn(t, srv)
+	c.Timeout = 1 // dial and handshake timeout of the helper in seconds; set before Start
+	startPlaying(t, srv, c)
+	res := watchKeyframe(c)
+
+	// a peer that accepts TCP but never answers the TLS handshake
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			conn, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- conn
+		}
+	}()
+	t.Cleanup(func() {
+		_ = silent.Close()
+		close(accepted)
+		for conn := range accepted {
+			_ = conn.Close()
+		}
+	})
+
+	c.stateMu.Lock()
+	c.uri = "rtspx://user:pass@" + silent.Addr().String() + "/SECRETPATHTOKEN"
+	c.stateMu.Unlock()
+
+	require.NoError(t, c.RequestKeyframe())
+	select {
+	case conn := <-accepted:
+		accepted <- conn // keep it for cleanup
+	case <-time.After(time.Second):
+		t.Fatal("helper did not connect")
+	}
+
+	endPlaying(t, c)
+	_ = c.Stop()
+
+	// the handshake is bounded by the dial timeout (1 s), not by Stop
+	err = res.wait(t, 1500*time.Millisecond)
+	assertNoLeak(t, srv, err)
+	require.NotContains(t, err.Error(), silent.Addr().String())
+	require.Contains(t, err.Error(), "dial: timeout")
+	waitKeyframeHelpers(t, c)
+
+	c.kfMu.Lock()
+	busy := c.kfBusy
+	c.kfMu.Unlock()
+	require.False(t, busy)
+	require.ErrorIs(t, c.RequestKeyframe(), ErrKeyframeClosed)
 }

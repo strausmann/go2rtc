@@ -52,15 +52,18 @@ func (c *Conn) RequestKeyframe() error {
 		return ErrKeyframeDisabled
 	}
 
-	c.kfMu.Lock()
-	closed := c.kfClosed
-	c.kfMu.Unlock()
-	if closed {
+	// the caller is the RTCP read loop: never wait for a lock.
+	// Lock order is kfMu before stateMu; nobody takes kfMu under stateMu.
+	if !c.kfMu.TryLock() {
+		return ErrKeyframeBusy
+	}
+	defer c.kfMu.Unlock()
+
+	if c.kfClosed {
 		return ErrKeyframeClosed
 	}
 
-	// stateMu is held over network I/O (Reconnect, Play, TEARDOWN),
-	// so never wait for it
+	// stateMu is held over network I/O (Reconnect, Play, TEARDOWN)
 	if !c.stateMu.TryLock() {
 		return ErrKeyframeBusy
 	}
@@ -73,12 +76,6 @@ func (c *Conn) RequestKeyframe() error {
 
 	now := c.keyframeNow()
 
-	c.kfMu.Lock()
-	defer c.kfMu.Unlock()
-
-	if c.kfClosed {
-		return ErrKeyframeClosed
-	}
 	if c.kfBusy || now.Sub(c.kfLast) < keyframeInterval {
 		return ErrKeyframeThrottled
 	}
@@ -183,10 +180,14 @@ func (c *Conn) keyframeSession(uri string) (err error) {
 func (c *Conn) stopKeyframe() {
 	c.kfMu.Lock()
 	c.kfClosed = true
-	if c.kfRaw != nil {
-		_ = c.kfRaw.Close() // net.Conn is safe for concurrent use
-	}
+	raw := c.kfRaw
 	c.kfMu.Unlock()
+
+	// close outside kfMu: a *tls.Conn sends close_notify with a write deadline,
+	// RequestKeyframe must not wait for that
+	if raw != nil {
+		_ = raw.Close() // net.Conn is safe for concurrent use
+	}
 }
 
 // keyframeError builds an error from stage and error class only.
