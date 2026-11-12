@@ -5,6 +5,13 @@ the UniFi Protect talkback source from upstream pull request
 [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) (Opus talkback to UniFi Protect
 cameras and doorbells) before that change is available in an upstream release.
 
+## Carried upstream pull requests
+
+| Upstream PR | Purpose |
+|---|---|
+| [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
+| [AlexxIT/go2rtc#2486](https://github.com/AlexxIT/go2rtc/pull/2486) | Read RTCP feedback from WebRTC senders so pion's NACK responder can retransmit lost packets |
+
 ## Branch model
 
 | Branch | Purpose |
