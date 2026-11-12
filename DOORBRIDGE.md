@@ -5,6 +5,13 @@ the UniFi Protect talkback source from upstream pull request
 [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) (Opus talkback to UniFi Protect
 cameras and doorbells) before that change is available in an upstream release.
 
+## Carried upstream pull requests
+
+| Upstream PR | Purpose |
+|---|---|
+| [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
+| [AlexxIT/go2rtc#2486](https://github.com/AlexxIT/go2rtc/pull/2486) | Read RTCP feedback from WebRTC senders so pion's NACK responder can retransmit lost packets |
+
 ## Branch model
 
 | Branch | Purpose |
@@ -55,6 +62,12 @@ A push or merge builds nothing. Images are built only by the daily 04:00 UTC sch
 already exists, the run ends silently. The job refuses to run on any ref other than `doorbridge`.
 
 Consumers should pin the `doorbridge-<sha7>` tag.
+
+## Pull request tests
+
+`doorbridge-test.yml` runs the WebRTC tests (`pkg/webrtc`, `internal/webrtc`) on pull requests
+against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
+32-bit platforms upstream builds. It builds no images, pushes nothing and uses no Go cache.
 
 ## Exit condition
 

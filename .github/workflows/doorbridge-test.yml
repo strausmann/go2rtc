@@ -1,0 +1,49 @@
+name: Doorbridge tests
+
+# Runs the WebRTC tests on pull requests against doorbridge and on pushes to
+# doorbridge. Builds no images and pushes nothing (release.yml does that, on
+# schedule or by hand only). The 386 job covers the 32-bit platforms upstream
+# builds (386, arm/v6, arm/v7, mipsle), where int arithmetic overflows earlier.
+on:
+  pull_request:
+    branches: [doorbridge]
+  push:
+    branches: [doorbridge]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doorbridge-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  webrtc:
+    name: WebRTC tests (${{ matrix.goarch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            flags: -race -count=3
+          # The race detector is not available on 386; amd64 covers it.
+          - goarch: "386"
+            flags: -count=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # No cache: pull requests run unvetted code, and the Go cache scope is
+      # shared with other workflows on the same ref.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: go test
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go test ${{ matrix.flags }} ./pkg/webrtc/... ./internal/webrtc/...
