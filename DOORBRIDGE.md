@@ -122,7 +122,7 @@ Consumers should pin the `doorbridge-<sha7>` tag.
 `internal/rtsp`) and the keyframe forwarding tests (`-run Keyframe` in `internal/streams`) on pull
 requests against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
 32-bit platforms upstream builds. The package selections skip pre-existing failures (`pkg/core`
-tests, two tests in `internal/streams`) so that the gate only turns red for real defects. It builds no images, pushes nothing and uses no Go cache.
+tests, two tests in `internal/streams`, and `TestURLParse` in `pkg/rtsp`, which hangs on the CI Go version) so that the gate only turns red for real defects. It builds no images, pushes nothing and uses no Go cache.
 
 ## Exit condition
 
