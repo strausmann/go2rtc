@@ -63,6 +63,12 @@ already exists, the run ends silently. The job refuses to run on any ref other t
 
 Consumers should pin the `doorbridge-<sha7>` tag.
 
+## Pull request tests
+
+`doorbridge-test.yml` runs the WebRTC tests (`pkg/webrtc`, `internal/webrtc`) on pull requests
+against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
+32-bit platforms upstream builds. It builds no images, pushes nothing and uses no Go cache.
+
 ## Exit condition
 
 This fork is temporary. Once the talkback source from PR #2340 (or an equivalent) is part of an
