@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// defaultTimeout is the package default, read before any test changes Timeout.
+var defaultTimeout = Timeout
+
 // restoreTimeout restores the package wide Timeout after the test.
 func restoreTimeout(t *testing.T) {
 	old := Timeout
@@ -35,7 +38,7 @@ func TestTimeout(t *testing.T) {
 // TestTimeoutRestored must run after TestTimeout: it fails if TestTimeout
 // leaks its Timeout value into later tests.
 func TestTimeoutRestored(t *testing.T) {
-	require.Equal(t, 5*time.Second, Timeout)
+	require.Equal(t, defaultTimeout, Timeout)
 }
 
 func TestMissedControl(t *testing.T) {
@@ -52,7 +55,7 @@ func TestMissedControl(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		b := make([]byte, 8192)
 		for {

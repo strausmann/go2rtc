@@ -247,9 +247,11 @@ func TestReadRTCPKeyframeAfterFilteredNack(t *testing.T) {
 	require.EqualValues(t, 1, keyframes.Load())
 }
 
-// End-to-end over loopback: the limiter empties a NACK for a foreign SSRC
-// sent in the same compound as a PLI; the PLI must still reach the handler.
-func TestConnKeyframeHandlerAfterFilteredNack(t *testing.T) {
+// End-to-end over loopback: a compound with a NACK for a foreign SSRC and a
+// PLI is sent; the PLI must reach the handler. Over a real connection srtp
+// delivers the two packets separately, so this does not exercise the limiter
+// emptying a NACK next to a PLI; TestReadRTCPKeyframeAfterFilteredNack does.
+func TestConnKeyframeLoopbackCompoundWithForeignNack(t *testing.T) {
 	p := newLoopbackPeers(t)
 	mid, ssrc := p.videoSender(t)
 	handler, calls := countingHandler()

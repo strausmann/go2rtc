@@ -66,7 +66,8 @@ func (c *fakeKeyframeConsumer) GetMedias() []*core.Media {
 // AddTrack binds a sender so the producer counts as having readers
 // (otherwise AddConsumer stops it again).
 func (c *fakeKeyframeConsumer) AddTrack(media *core.Media, codec *core.Codec, track *core.Receiver) error {
-	core.NewSender(media, codec).Bind(track)
+	// Bind is deprecated, but it is how a sender counts as a reader of the track here
+	core.NewSender(media, codec).Bind(track) //nolint:staticcheck // SA1019: see above
 	return nil
 }
 
@@ -101,7 +102,7 @@ func newKeyframeStream(t *testing.T, prod core.Producer) *Stream {
 			p.workerID++
 			p.mu.Unlock()
 		}
-		_ = prod.Stop()
+		_ = prod.Stop() //nolint:staticcheck // SA1019: Stop is the core.Producer method
 	})
 	return stream
 }
@@ -164,7 +165,7 @@ func TestProducerRequestKeyframeDoesNotBlock(t *testing.T) {
 
 	select {
 	case err := <-errc:
-		require.Error(t, err)
+		require.ErrorIs(t, err, errProducerBusy)
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("RequestKeyframe blocked on the producer mutex")
 	}

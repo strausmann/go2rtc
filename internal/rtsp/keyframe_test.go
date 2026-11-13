@@ -3,7 +3,6 @@ package rtsp
 import (
 	"bytes"
 	"errors"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -25,12 +24,13 @@ func TestParseKeyframe(t *testing.T) {
 		{"resetup among others", "timeout=5#keyframe=resetup#media=video", "resetup", true},
 		{"unknown value", "keyframe=yes", "", false},
 		{"empty value", "keyframe=", "", false},
+		{"bare parameter", "keyframe", "", false},
 		{"first value wins", "keyframe=resetup#keyframe=x", "resetup", true},
 		{"first value wins, invalid first", "keyframe=x#keyframe=resetup", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var query url.Values = streams.ParseQuery(tc.rawQuery)
+			query := streams.ParseQuery(tc.rawQuery)
 			mode, ok := parseKeyframe(query)
 			if mode != tc.wantMode || ok != tc.wantOK {
 				t.Fatalf("parseKeyframe(%q) = (%q, %t), want (%q, %t)", tc.rawQuery, mode, ok, tc.wantMode, tc.wantOK)
