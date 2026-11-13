@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/internal/streams"
+	"github.com/AlexxIT/go2rtc/pkg/rtsp"
 	"github.com/rs/zerolog"
 )
 
@@ -75,4 +76,42 @@ func TestKeyframeLoggerDebugOnly(t *testing.T) {
 			t.Fatalf("unexpected output %q", out)
 		}
 	})
+}
+
+func TestApplyKeyframe(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawQuery string
+		wantMode string
+		wantHook bool
+		wantWarn bool
+	}{
+		{"off by default", "timeout=5", "", false, false},
+		{"resetup", "keyframe=resetup", rtsp.KeyframeResetup, true, false},
+		{"bare parameter", "keyframe", "", false, true},
+		{"unknown value", "keyframe=yes", "", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			l := zerolog.New(&buf)
+			conn := rtsp.NewClient("rtsp://example.invalid/stream")
+
+			applyKeyframe(conn, streams.ParseQuery(tc.rawQuery), l)
+
+			if conn.Keyframe != tc.wantMode {
+				t.Errorf("Keyframe = %q, want %q", conn.Keyframe, tc.wantMode)
+			}
+			if (conn.OnKeyframe != nil) != tc.wantHook {
+				t.Errorf("OnKeyframe set = %t, want %t", conn.OnKeyframe != nil, tc.wantHook)
+			}
+			out := buf.String()
+			if warned := strings.Contains(out, `"level":"warn"`); warned != tc.wantWarn {
+				t.Errorf("warning logged = %t, want %t (%q)", warned, tc.wantWarn, out)
+			}
+			if strings.Contains(out, "example.invalid") {
+				t.Errorf("warning contains the URL: %q", out)
+			}
+		})
+	}
 }

@@ -107,14 +107,7 @@ func rtspHandler(rawURL string) (core.Producer, error) {
 		conn.Timeout = core.Atoi(query.Get("timeout"))
 		conn.Transport = query.Get("transport")
 
-		mode, ok := parseKeyframe(query)
-		if !ok {
-			log.Warn().Msg("[rtsp] unknown keyframe mode, keyframe requests disabled")
-		}
-		conn.Keyframe = mode
-		if mode != "" {
-			conn.OnKeyframe = keyframeLogger(log)
-		}
+		applyKeyframe(conn, query, log)
 	}
 
 	if log.Trace().Enabled() {
@@ -166,6 +159,19 @@ func parseKeyframe(query url.Values) (mode string, ok bool) {
 		return rtsp.KeyframeResetup, true
 	}
 	return "", false
+}
+
+// applyKeyframe configures the keyframe option of conn from the source query.
+// An unknown value logs a warning (without URL) and leaves the feature off.
+func applyKeyframe(conn *rtsp.Conn, query url.Values, l zerolog.Logger) {
+	mode, ok := parseKeyframe(query)
+	if !ok {
+		l.Warn().Msg("[rtsp] unknown keyframe mode, keyframe requests disabled")
+	}
+	conn.Keyframe = mode
+	if mode != "" {
+		conn.OnKeyframe = keyframeLogger(l)
+	}
 }
 
 // keyframeLogger reports the result of each keyframe helper session on debug
