@@ -1,6 +1,7 @@
 package rtsp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -52,8 +53,10 @@ var _ core.KeyframeRequester = (*Conn)(nil)
 // result is reported through OnKeyframe. At most one helper session runs at a
 // time and at most one starts per keyframeInterval; other requests are dropped.
 // Both limits apply per connection: after a reconnect of the source the new
-// connection starts with fresh limits, while the helper session of the old
-// one may still be ending.
+// connection starts with fresh limits. Stop of the old connection aborts its
+// helper session in every phase (TCP connect, TLS handshake, RTSP exchange)
+// but does not wait for it, so the two overlap at most for the moment the
+// aborted helper needs to return.
 func (c *Conn) RequestKeyframe() error {
 	if c.Keyframe != KeyframeResetup {
 		return ErrKeyframeDisabled
@@ -93,10 +96,13 @@ func (c *Conn) RequestKeyframe() error {
 		return ErrKeyframeThrottled
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	c.kfLast = now
 	c.kfBusy = true
+	c.kfCancel = cancel
 	c.kfWG.Add(1)
-	go c.runKeyframeHelper(uri)
+	go c.runKeyframeHelper(ctx, uri)
 
 	return nil
 }
@@ -108,24 +114,28 @@ func (c *Conn) keyframeNow() time.Time {
 	return time.Now()
 }
 
-func (c *Conn) runKeyframeHelper(uri string) {
+func (c *Conn) runKeyframeHelper(ctx context.Context, uri string) {
 	start := time.Now()
 
 	defer c.kfWG.Done()
 
-	err := c.keyframeSession(uri)
+	err := c.keyframeSession(ctx, uri)
 
 	c.kfMu.Lock()
+	cancel := c.kfCancel
 	c.kfRaw = nil
+	c.kfCancel = nil
 	c.kfBusy = false
 	c.kfMu.Unlock()
+
+	cancel() // releases the context; stopKeyframe may have called it already
 
 	if c.OnKeyframe != nil {
 		c.OnKeyframe(err, time.Since(start))
 	}
 }
 
-func (c *Conn) keyframeSession(uri string) (err error) {
+func (c *Conn) keyframeSession(ctx context.Context, uri string) (err error) {
 	helper := NewClient(uri)
 	helper.UserAgent = c.UserAgent
 	helper.Timeout = c.Timeout
@@ -140,7 +150,9 @@ func (c *Conn) keyframeSession(uri string) (err error) {
 	helper.Backchannel = false
 	helper.noRedirect = true
 
-	if err = helper.Dial(); err != nil {
+	// ctx is cancelled by stopKeyframe: Stop ends a helper that is still in
+	// TCP connect or TLS handshake at once, not only after the dial timeout
+	if err = helper.dial(ctx); err != nil {
 		return keyframeError("dial", err, false)
 	}
 
@@ -193,13 +205,19 @@ func (c *Conn) keyframeSession(uri string) (err error) {
 	return nil
 }
 
-// stopKeyframe marks the connection closed and closes the raw connection of
-// a running helper session. It does not wait for the helper goroutine.
+// stopKeyframe marks the connection closed, aborts the dial of a running
+// helper session and closes its raw connection. It does not wait for the
+// helper goroutine; that one ends right after (no blocking call remains).
 func (c *Conn) stopKeyframe() {
 	c.kfMu.Lock()
 	c.kfClosed = true
 	raw := c.kfRaw
+	cancel := c.kfCancel
 	c.kfMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 
 	// close outside kfMu: a *tls.Conn sends close_notify with a write deadline,
 	// RequestKeyframe must not wait for that
@@ -228,7 +246,8 @@ func keyframeErrorClass(err error) string {
 	case errors.Is(err, os.ErrDeadlineExceeded),
 		errors.As(err, &netErr) && netErr.Timeout():
 		return "timeout"
-	case errors.Is(err, net.ErrClosed), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+	case errors.Is(err, net.ErrClosed), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, context.Canceled): // dial aborted by stopKeyframe
 		return "closed"
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return "refused"

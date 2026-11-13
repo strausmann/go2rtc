@@ -47,8 +47,9 @@ following, and the helper always uses TCP-interleaved transport, even with `#tra
 - At most one helper session per second per source connection, shared by all viewers; requests
   inside the window are dropped, not queued.
 - Never two helper sessions at the same time on one connection. After the source reconnected, the
-  new connection starts with fresh limits while the helper session of the old one may still be
-  ending, so for a moment two can overlap.
+  new connection starts with fresh limits. Stopping the old connection aborts its helper session in
+  every phase, including a pending TCP connect or TLS handshake, so the two overlap at most for the
+  moment the aborted helper needs to return.
 - The helper session has the same dial timeout as the main source. Its RTSP exchange after the dial
   (OPTIONS to SETUP) is limited to 2 s.
 - Failures never affect the main stream. They are logged at debug level only, as stage and error

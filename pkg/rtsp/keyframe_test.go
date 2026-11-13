@@ -3,6 +3,7 @@ package rtsp
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -760,18 +761,64 @@ func TestStopKeyframeClosesOutsideLock(t *testing.T) {
 	}
 }
 
+// stopDeadline is how fast Stop must end a helper session that is still in
+// its dial phase. The dial timeout in these tests is several seconds, so a
+// helper that only ends by its timeout fails clearly.
+const stopDeadline = 200 * time.Millisecond
+
+// assertStopEndsDialingHelper points the helper session at uri, waits until
+// it is in its dial phase, stops the connection and checks that the helper
+// ends within stopDeadline instead of the dial timeout.
+func assertStopEndsDialingHelper(t *testing.T, srv *fakeRTSPServer, c *Conn, uri string, dialing <-chan struct{}) {
+	t.Helper()
+	res := watchKeyframe(c)
+
+	c.stateMu.Lock()
+	c.uri = uri
+	c.stateMu.Unlock()
+
+	require.NoError(t, c.RequestKeyframe())
+	select {
+	case <-dialing:
+	case <-time.After(time.Second):
+		t.Fatal("helper did not reach its dial phase")
+	}
+
+	endPlaying(t, c)
+	stopped := time.Now()
+	_ = c.Stop()
+
+	var err error
+	select {
+	case err = <-res.ch:
+	case <-time.After(stopDeadline):
+		t.Fatalf("helper in dial phase still running %v after Stop", stopDeadline)
+	}
+	t.Logf("helper ended %v after Stop", time.Since(stopped))
+	assertNoLeak(t, srv, err)
+	require.Contains(t, err.Error(), "dial: closed")
+	waitKeyframeHelpers(t, c)
+
+	c.kfMu.Lock()
+	busy, cancel := c.kfBusy, c.kfCancel
+	c.kfMu.Unlock()
+	require.False(t, busy)
+	require.Nil(t, cancel)
+	require.ErrorIs(t, c.RequestKeyframe(), ErrKeyframeClosed)
+}
+
 func TestStopEndsKeyframeHelperInTLSHandshake(t *testing.T) {
 	withKeyframeGlobals(t, time.Second, 2*time.Second)
 	srv := newFakeRTSPServer(t)
 	c := newSetupConn(t, srv)
-	c.Timeout = 1 // dial and handshake timeout of the helper in seconds; set before Start
+	c.Timeout = 5 // dial and handshake timeout of the helper in seconds; set before Start
 	startPlaying(t, srv, c)
-	res := watchKeyframe(c)
 
 	// a peer that accepts TCP but never answers the TLS handshake
 	silent, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	accepted := make(chan net.Conn, 4)
+	dialing := make(chan struct{})
 	go func() {
 		for {
 			conn, err := silent.Accept()
@@ -779,41 +826,21 @@ func TestStopEndsKeyframeHelperInTLSHandshake(t *testing.T) {
 				return
 			}
 			accepted <- conn
+			close(dialing)
 		}
 	}()
-	t.Cleanup(func() {
-		_ = silent.Close()
-		close(accepted)
-		for conn := range accepted {
-			_ = conn.Close()
-		}
-	})
+	t.Cleanup(func() { _ = silent.Close() })
 
-	c.stateMu.Lock()
-	c.uri = "rtspx://user:pass@" + silent.Addr().String() + "/SECRETPATHTOKEN"
-	c.stateMu.Unlock()
+	assertStopEndsDialingHelper(t, srv, c,
+		"rtspx://user:pass@"+silent.Addr().String()+"/SECRETPATHTOKEN", dialing)
 
-	require.NoError(t, c.RequestKeyframe())
-	select {
-	case conn := <-accepted:
-		accepted <- conn // keep it for cleanup
-	case <-time.After(time.Second):
-		t.Fatal("helper did not connect")
+	// the helper must have closed its socket, not just returned
+	conn := <-accepted
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(stopDeadline))
+	_, err = conn.Read(make([]byte, 512)) // ClientHello first, then EOF
+	for err == nil {
+		_, err = conn.Read(make([]byte, 512))
 	}
-
-	endPlaying(t, c)
-	_ = c.Stop()
-
-	// the handshake is bounded by the dial timeout (1 s), not by Stop
-	err = res.wait(t, 1500*time.Millisecond)
-	assertNoLeak(t, srv, err)
-	require.NotContains(t, err.Error(), silent.Addr().String())
-	require.Contains(t, err.Error(), "dial: timeout")
-	waitKeyframeHelpers(t, c)
-
-	c.kfMu.Lock()
-	busy := c.kfBusy
-	c.kfMu.Unlock()
-	require.False(t, busy)
-	require.ErrorIs(t, c.RequestKeyframe(), ErrKeyframeClosed)
+	require.ErrorIs(t, err, io.EOF, "helper socket still open after Stop")
 }

@@ -65,7 +65,8 @@ type Conn struct {
 	kfBusy   bool
 	kfClosed bool
 	kfLast   time.Time
-	kfRaw    net.Conn // raw connection of the running helper session
+	kfRaw    net.Conn           // raw connection of the running helper session
+	kfCancel context.CancelFunc // aborts the dial of the running helper session
 	kfWG     sync.WaitGroup
 	kfNow    func() time.Time // nil = time.Now
 }

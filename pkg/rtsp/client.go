@@ -2,6 +2,7 @@ package rtsp
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -31,6 +32,12 @@ func NewClient(uri string) *Conn {
 }
 
 func (c *Conn) Dial() (err error) {
+	return c.dial(context.Background())
+}
+
+// dial is Dial with a context that aborts the TCP connect and TLS handshake.
+// The WebSocket transport ignores ctx.
+func (c *Conn) dial(ctx context.Context) (err error) {
 	if c.URL, err = url.Parse(c.uri); err != nil {
 		return
 	}
@@ -45,7 +52,7 @@ func (c *Conn) Dial() (err error) {
 		} else {
 			timeout = core.ConnDialTimeout
 		}
-		conn, err = tcp.Dial(c.URL, timeout)
+		conn, err = tcp.DialContext(ctx, c.URL, timeout)
 
 		if c.Transport != "udp" {
 			c.Protocol = "rtsp+tcp"
