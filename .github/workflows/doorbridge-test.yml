@@ -45,13 +45,14 @@ jobs:
 
       # The selections below deliberately avoid pre-existing failures
       # (pkg/core does not build its tests, internal/streams has two red tests,
-      # and TestURLParse in pkg/rtsp recurses until the 10 min test timeout on
-      # the Go version used here): the gate must only turn red for real
-      # defects. pkg/core is still compiled through pkg/rtsp.
+      # and TestURLParse in pkg/rtsp recurses endlessly in urlParse on Go up to
+      # 1.26, the version go.mod selects here, until the 10 min test timeout):
+      # the gate must only turn red for real defects. pkg/core is still
+      # compiled through pkg/rtsp.
       - name: go test
         env:
           GOARCH: ${{ matrix.goarch }}
-        run: go test ${{ matrix.flags }} -skip '^TestURLParse$' ./pkg/webrtc/... ./internal/webrtc/... ./pkg/rtsp/... ./internal/rtsp/...
+        run: go test ${{ matrix.flags }} -skip '^TestURLParse$' ./pkg/webrtc/... ./internal/webrtc/... ./pkg/rtsp/... ./internal/rtsp/... ./pkg/tcp/...
 
       - name: go test (keyframe forwarding)
         env:
