@@ -26,6 +26,10 @@ var (
 	ErrKeyframeThrottled  = errors.New("rtsp: keyframe request throttled")
 	ErrKeyframeBusy       = errors.New("rtsp: keyframe request: connection busy")
 	ErrKeyframeClosed     = errors.New("rtsp: keyframe request: connection closed")
+	// ErrKeyframeTransport is returned for sources with a WebSocket transport:
+	// the dial of that transport has no timeout, a helper session could hang
+	// in it for good.
+	ErrKeyframeTransport = errors.New("rtsp: keyframe request: transport not supported")
 	// ErrKeyframeFailed is the root of every error of the helper session.
 	// The message carries only the stage and an error class, never the
 	// text of the inner error (it may contain the URL, credentials or host).
@@ -47,13 +51,22 @@ var _ core.KeyframeRequester = (*Conn)(nil)
 // keyframe. It never blocks: the session runs in its own goroutine, the
 // result is reported through OnKeyframe. At most one helper session runs at a
 // time and at most one starts per keyframeInterval; other requests are dropped.
+// Both limits apply per connection: after a reconnect of the source the new
+// connection starts with fresh limits, while the helper session of the old
+// one may still be ending.
 func (c *Conn) RequestKeyframe() error {
 	if c.Keyframe != KeyframeResetup {
 		return ErrKeyframeDisabled
 	}
 
+	if c.Transport != "" && c.Transport != "tcp" && c.Transport != "udp" {
+		return ErrKeyframeTransport
+	}
+
 	// the caller is the RTCP read loop: never wait for a lock.
 	// Lock order is kfMu before stateMu; nobody takes kfMu under stateMu.
+	// kfMu is only held briefly, so losing the TryLock race is rare; the
+	// request is dropped like a throttled one and the viewer asks again.
 	if !c.kfMu.TryLock() {
 		return ErrKeyframeBusy
 	}

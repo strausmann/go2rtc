@@ -563,6 +563,20 @@ func TestKeyframeHelperNeverUDP(t *testing.T) {
 	require.NotContains(t, transports[1], "client_port")
 }
 
+// A WebSocket transport has no dial timeout, so a helper session could hang
+// in the dial for good: the request is refused before anything is dialed.
+func TestRequestKeyframeRefusedForWebSocketTransport(t *testing.T) {
+	withKeyframeGlobals(t, time.Second, 2*time.Second)
+	srv := newFakeRTSPServer(t)
+	c := newSetupConn(t, srv)
+	c.Transport = "ws://127.0.0.1:1/never-dialed" // set after the main SETUP and before Start
+	startPlaying(t, srv, c)
+
+	require.ErrorIs(t, c.RequestKeyframe(), ErrKeyframeTransport)
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, 1, srv.acceptedConns())
+}
+
 func TestKeyframeHelperUnauthorized(t *testing.T) {
 	withKeyframeGlobals(t, time.Second, 2*time.Second)
 	srv := newFakeRTSPServer(t)
