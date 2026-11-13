@@ -14,7 +14,8 @@ import (
 // maxRTCPReadErrors ends an RTCP read loop after this many consecutive failed
 // reads without a successful one in between. A single unparsable packet from
 // a viewer must not stop NACK and PLI handling; a reader that only fails must
-// not spin forever.
+// not spin forever. A viewer that sends only garbage ends the loop of its own
+// senders only; the loops of other viewers are not affected.
 const maxRTCPReadErrors = 64
 
 var _ core.KeyframeRequestSource = (*Conn)(nil)

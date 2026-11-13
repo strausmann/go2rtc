@@ -36,17 +36,21 @@ streams:
 ```
 
 Any other value logs a warning and leaves the feature off; the main stream is unaffected. Only
-`rtsp://`, `rtsps://` and `rtspx://` sources support it; other producers ignore the request.
+`rtsp://`, `rtsps://` and `rtspx://` sources support it; other producers ignore the request. Sources
+with a WebSocket transport (`#transport=ws...`) are refused as well: that dial has no timeout.
 
 **Behaviour.** The WebRTC sender watches RTCP feedback for PLI and FIR. A request for a video track
 is forwarded to the producer's current connection, which opens a short helper session to the same
 URL: OPTIONS, DESCRIBE, SETUP of the first video media, TEARDOWN. There is no PLAY, no redirect
 following, and the helper always uses TCP-interleaved transport, even with `#transport=udp`.
 
-- At most one helper session per second per source, shared by all viewers; requests inside the
-  window are dropped, not queued.
-- Never two helper sessions at the same time.
-- The helper session has the same dial timeout as the main source and an overall 2 s deadline.
+- At most one helper session per second per source connection, shared by all viewers; requests
+  inside the window are dropped, not queued.
+- Never two helper sessions at the same time on one connection. After the source reconnected, the
+  new connection starts with fresh limits while the helper session of the old one may still be
+  ending, so for a moment two can overlap.
+- The helper session has the same dial timeout as the main source. Its RTSP exchange after the dial
+  (OPTIONS to SETUP) is limited to 2 s.
 - Failures never affect the main stream. They are logged at debug level only, as stage and error
   class, without URL, host or token.
 
@@ -60,6 +64,8 @@ read end or after 64 consecutive errors).
   shared encoder emit a keyframe within roughly 0.03 to 0.2 s. Because the encoder is shared, the
   keyframe reaches all sessions and presumably the recording too. A firmware update may make the
   trick ineffective; that is harmless, viewers then wait for the next GOP as before.
+- A viewer that keeps sending PLI raises the keyframe rate of the shared encoder to at most one per
+  second (instead of one per GOP), including the Protect recording and all other viewers.
 - Tracks renegotiated after the first connect get no keyframe forwarding (pre-existing behaviour
   of the RTCP reader, which attaches once per connection).
 
@@ -119,10 +125,16 @@ Consumers should pin the `doorbridge-<sha7>` tag.
 ## Pull request tests
 
 `doorbridge-test.yml` runs the WebRTC and RTSP tests (`pkg/webrtc`, `internal/webrtc`, `pkg/rtsp`,
-`internal/rtsp`) and the keyframe forwarding tests (`-run Keyframe` in `internal/streams`) on pull
-requests against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
-32-bit platforms upstream builds. The package selections skip pre-existing failures (`pkg/core`
-tests, two tests in `internal/streams`, and `TestURLParse` in `pkg/rtsp`, which hangs on the CI Go version) so that the gate only turns red for real defects. It builds no images, pushes nothing and uses no Go cache.
+`internal/rtsp`), the TLS dial tests (`pkg/tcp`) and the keyframe forwarding tests (`-run Keyframe`
+in `internal/streams`) on pull requests against `doorbridge` and on pushes to it: on `amd64` with the
+race detector, and on `386` for the 32-bit platforms upstream builds.
+
+The package selections skip pre-existing failures so that the gate only turns red for real defects:
+the `pkg/core` tests, two tests in `internal/streams`, and `TestURLParse` in `pkg/rtsp`. That test
+recurses endlessly in `urlParse` on Go up to 1.26, which is what `go.mod` selects in CI, until the
+10 min test timeout; the image is built with a newer Go and is not affected.
+
+The workflow builds no images, pushes nothing and uses no Go cache.
 
 ## Exit condition
 

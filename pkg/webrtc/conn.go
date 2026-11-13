@@ -25,6 +25,8 @@ type Conn struct {
 	closed   core.Waiter
 	rtcpOnce sync.Once
 
+	// keyframeMu guards keyframeHandlers only; never hold it across I/O or a
+	// handler call.
 	keyframeMu       sync.Mutex
 	keyframeHandlers map[string]func() // by MID, see OnKeyframeRequest
 }
