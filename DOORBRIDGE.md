@@ -57,7 +57,7 @@ following, and the helper always uses TCP-interleaved transport, even with `#tra
 
 The same change also bounds the TLS handshake by the dial timeout, which hardens the main
 connection too, and keeps the RTCP read loop alive across a single unparsable packet (it ends on
-read end or after 64 consecutive errors).
+read end or after 64 consecutive errors; the latter is logged at debug level with the MID only).
 
 **Limits.**
 

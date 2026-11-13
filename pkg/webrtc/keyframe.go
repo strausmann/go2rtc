@@ -59,12 +59,22 @@ func (c *Conn) senderMid(sender *webrtc.RTPSender) string {
 // readSenderRTCP keeps pion's interceptors (NACK limiter and responder) running
 // for sender and reports PLI/FIR to the handler registered for its MID.
 func (c *Conn) readSenderRTCP(sender *webrtc.RTPSender) {
-	mid := c.senderMid(sender)
-	readRTCP(sender.Read, func() {
-		if handler := c.keyframeHandler(mid); handler != nil {
+	readMidRTCP(c.senderMid(sender), sender.Read, c.keyframeHandler)
+}
+
+// readMidRTCP runs readRTCP for the sender with MID mid and logs at debug
+// level when the loop gives up on its error budget. The log carries only the
+// MID and the count: the read error may contain the viewer's address.
+func readMidRTCP(mid string, read func(b []byte) (int, interceptor.Attributes, error), handlerFor func(mid string) func()) {
+	gaveUp := readRTCP(read, func() {
+		if handler := handlerFor(mid); handler != nil {
 			handler()
 		}
 	})
+	if gaveUp {
+		log.Debug().Str("mid", mid).
+			Msgf("[webrtc] RTCP read loop stopped after %d consecutive errors", maxRTCPReadErrors)
+	}
 }
 
 // wantsKeyframe reports whether pkts contain a keyframe request (PLI or FIR).
@@ -90,21 +100,21 @@ func rtcpReadDone(err error) bool {
 // cache the interceptors share, so a PLI next to a NACK the limiter emptied is
 // seen even if the raw bytes could not be rebuilt. onKeyframe is called once
 // per read that contains PLI or FIR; it runs in this loop and must return
-// immediately.
+// immediately. It reports whether it stopped because of the error budget.
 //
 // sender.ReadRTCP is not used: it parses the raw bytes again and fails on the
 // whole compound if a single packet in it is invalid.
-func readRTCP(read func(b []byte) (int, interceptor.Attributes, error), onKeyframe func()) {
+func readRTCP(read func(b []byte) (int, interceptor.Attributes, error), onKeyframe func()) (gaveUp bool) {
 	buf := make([]byte, 1500)
 	errs := 0
 	for {
 		n, attr, err := read(buf)
 		if err != nil {
 			if rtcpReadDone(err) {
-				return
+				return false
 			}
 			if errs++; errs >= maxRTCPReadErrors {
-				return
+				return true
 			}
 			continue
 		}
