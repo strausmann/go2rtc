@@ -875,7 +875,7 @@ func TestStopEndsKeyframeHelperInTLSHandshake(t *testing.T) {
 
 	// the helper must have closed its socket, not just returned
 	conn := <-accepted
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetReadDeadline(time.Now().Add(stopDeadline))
 	_, err = conn.Read(make([]byte, 512)) // ClientHello first, then EOF
 	for err == nil {
