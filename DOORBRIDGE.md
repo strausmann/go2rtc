@@ -132,8 +132,7 @@ race detector, and on `386` for the 32-bit platforms upstream builds.
 
 The package selections skip pre-existing failures so that the gate only turns red for real defects:
 the `pkg/core` tests, two tests in `internal/streams`, and `TestURLParse` in `pkg/rtsp`. That test
-recurses endlessly in `urlParse` on Go up to 1.26, which is what `go.mod` selects in CI, until the
-10 min test timeout; the image is built with a newer Go and is not affected.
+hangs on the CI runner's Go version until the 10 min test timeout; this is tracked separately.
 
 The workflow builds no images, pushes nothing and uses no Go cache.
 
