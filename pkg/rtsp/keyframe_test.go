@@ -481,13 +481,10 @@ func TestRequestKeyframeNeverParallel(t *testing.T) {
 	require.Equal(t, 1, srv.maxHelpers())
 }
 
-func TestRequestKeyframeFloodIsBounded(t *testing.T) {
-	withKeyframeGlobals(t, time.Second, 2*time.Second)
-	srv := newFakeRTSPServer(t)
-	c := newPlayingConn(t, srv)
-
+// floodKeyframe calls RequestKeyframe from 50 goroutines for d.
+func floodKeyframe(c *Conn, d time.Duration) {
 	var wg sync.WaitGroup
-	stop := time.Now().Add(1500 * time.Millisecond)
+	stop := time.Now().Add(d)
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
@@ -498,11 +495,53 @@ func TestRequestKeyframeFloodIsBounded(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	time.Sleep(100 * time.Millisecond)
+}
 
-	helperSetups := srv.count(MethodSetup) - 1
-	require.LessOrEqual(t, helperSetups, 2, "helper sessions")
-	require.LessOrEqual(t, srv.maxHelpers(), 1)
+// The bounds are checked at points the test controls, not by timing: the
+// server counts connections when it accepts them, and the throttle clock only
+// moves when the test moves it. (Counting open connections on the server lags
+// behind the client closing them and made this test flaky under CPU load.)
+func TestRequestKeyframeFloodIsBounded(t *testing.T) {
+	t.Run("one helper at a time", func(t *testing.T) {
+		withKeyframeGlobals(t, time.Second, 10*time.Second)
+		srv := newFakeRTSPServer(t)
+		c := newPlayingConn(t, srv)
+		clock := newFakeClock(c)
+		srv.set(func(s *fakeRTSPServer) { s.hangSetup = true })
+
+		// this helper hangs in SETUP and runs for the whole flood
+		require.NoError(t, c.RequestKeyframe())
+		require.Eventually(t, func() bool { return srv.count(MethodSetup) == 2 }, 2*time.Second, 5*time.Millisecond)
+
+		clock.Add(time.Hour) // only the running helper can reject a request now
+		floodKeyframe(c, 500*time.Millisecond)
+
+		require.Equal(t, 2, srv.acceptedConns(), "main session plus one helper")
+		require.Equal(t, 2, srv.count(MethodSetup))
+	})
+
+	t.Run("one helper per interval", func(t *testing.T) {
+		withKeyframeGlobals(t, time.Second, 2*time.Second)
+		srv := newFakeRTSPServer(t)
+		c := newPlayingConn(t, srv)
+		clock := newFakeClock(c) // frozen: the interval never passes during the flood
+		res := watchKeyframe(c)
+
+		// the first helper has ended before the flood (OnKeyframe runs after
+		// kfBusy is cleared), so only the interval can reject a request
+		require.NoError(t, c.RequestKeyframe())
+		require.NoError(t, res.wait(t, 2*time.Second))
+		floodKeyframe(c, 500*time.Millisecond)
+
+		require.Equal(t, int32(1), res.n.Load())
+		require.Equal(t, 2, srv.acceptedConns(), "main session plus one helper")
+		require.Equal(t, 2, srv.count(MethodSetup))
+
+		// and it is the interval: once it has passed, the next request starts a helper
+		clock.Add(time.Second)
+		require.NoError(t, c.RequestKeyframe())
+		require.NoError(t, res.wait(t, 2*time.Second))
+	})
 }
 
 func TestKeyframeHelperErrorReported(t *testing.T) {
