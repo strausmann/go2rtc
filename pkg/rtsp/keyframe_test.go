@@ -31,6 +31,7 @@ type fakeRTSPServer struct {
 	active         int
 	maxActive      int // max simultaneous connections minus the first one
 	accepted       int
+	setupTransport []string // Transport header of every SETUP request
 
 	wg sync.WaitGroup
 }
@@ -98,6 +99,12 @@ func (s *fakeRTSPServer) acceptedConns() int {
 	return s.accepted
 }
 
+func (s *fakeRTSPServer) setupTransports() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.setupTransport...)
+}
+
 func (s *fakeRTSPServer) serve() {
 	defer s.wg.Done()
 	for {
@@ -133,7 +140,7 @@ func (s *fakeRTSPServer) handle(conn net.Conn) {
 	r := bufio.NewReader(conn)
 	for {
 		// read one request up to the empty line
-		var method, cseq string
+		var method, cseq, transport string
 		for first := true; ; first = false {
 			line, err := r.ReadString('\n')
 			if err != nil {
@@ -145,13 +152,21 @@ func (s *fakeRTSPServer) handle(conn net.Conn) {
 			}
 			if first {
 				method, _, _ = strings.Cut(line, " ")
-			} else if k, v, ok := strings.Cut(line, ":"); ok && strings.EqualFold(k, "CSeq") {
-				cseq = strings.TrimSpace(v)
+			} else if k, v, ok := strings.Cut(line, ":"); ok {
+				switch {
+				case strings.EqualFold(k, "CSeq"):
+					cseq = strings.TrimSpace(v)
+				case strings.EqualFold(k, "Transport"):
+					transport = strings.TrimSpace(v)
+				}
 			}
 		}
 
 		s.mu.Lock()
 		s.counts[method]++
+		if method == MethodSetup {
+			s.setupTransport = append(s.setupTransport, transport)
+		}
 		describeStatus := s.describeStatus
 		setupStatus := s.setupStatus
 		contentBase := s.contentBase
@@ -506,6 +521,46 @@ func TestKeyframeHelperErrorReported(t *testing.T) {
 	state := c.state
 	c.stateMu.Unlock()
 	require.Equal(t, StatePlay, state)
+}
+
+// The helper session must never redial. SetupMedia redials once when SETUP
+// fails on a connection with Backchannel set; that new connection would be
+// neither in kfRaw nor under the helper deadline.
+func TestKeyframeHelperNoRedialOnSetupError(t *testing.T) {
+	withKeyframeGlobals(t, time.Second, 2*time.Second)
+	srv := newFakeRTSPServer(t)
+	c := newPlayingConn(t, srv)
+	c.Backchannel = true // normal for RTSP sources; the helper must not inherit it
+	res := watchKeyframe(c)
+	srv.set(func(s *fakeRTSPServer) { s.setupStatus = 500 })
+
+	require.NoError(t, c.RequestKeyframe())
+	err := res.wait(t, 2*time.Second)
+	assertNoLeak(t, srv, err)
+	require.Contains(t, err.Error(), "setup: response")
+
+	// the main connection plus exactly one helper connection
+	require.Equal(t, 2, srv.acceptedConns())
+	require.Equal(t, 2, srv.count(MethodSetup))
+}
+
+// The helper session uses TCP-interleaved even if the source uses UDP:
+// it never plays, so a UDP port pair would be opened for nothing.
+func TestKeyframeHelperNeverUDP(t *testing.T) {
+	withKeyframeGlobals(t, time.Second, 2*time.Second)
+	srv := newFakeRTSPServer(t)
+	c := newSetupConn(t, srv)
+	c.Transport = "udp" // set after the main SETUP and before Start
+	startPlaying(t, srv, c)
+	res := watchKeyframe(c)
+
+	require.NoError(t, c.RequestKeyframe())
+	require.NoError(t, res.wait(t, 2*time.Second))
+
+	transports := srv.setupTransports()
+	require.Len(t, transports, 2)
+	require.Contains(t, transports[1], "RTP/AVP/TCP")
+	require.NotContains(t, transports[1], "client_port")
 }
 
 func TestKeyframeHelperUnauthorized(t *testing.T) {

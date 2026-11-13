@@ -116,9 +116,14 @@ func (c *Conn) keyframeSession(uri string) (err error) {
 	helper := NewClient(uri)
 	helper.UserAgent = c.UserAgent
 	helper.Timeout = c.Timeout
+	// Never UDP: the helper never plays, so a UDP port pair would be opened
+	// for nothing. RequestKeyframe has already refused WebSocket transports.
 	if c.Transport != "udp" {
 		helper.Transport = c.Transport
 	}
+	// Backchannel must stay false: SetupMedia redials when SETUP fails on a
+	// backchannel connection, and that new connection would be neither in kfRaw
+	// nor under the deadline below.
 	helper.Backchannel = false
 	helper.noRedirect = true
 
