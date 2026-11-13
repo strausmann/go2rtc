@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"os"
@@ -79,4 +80,32 @@ func TestDialTLSHandshakeTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDialContextCancelAbortsTLSHandshake(t *testing.T) {
+	u, err := url.Parse("rtspx://" + silentServer(t) + "/stream")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	start := time.Now()
+	conn, err := DialContext(ctx, u, 5*time.Second)
+	took := time.Since(start)
+
+	require.Nil(t, conn)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, took, time.Second, "handshake not aborted by the context")
+}
+
+func TestDialContextCancelled(t *testing.T) {
+	u, err := url.Parse("rtsp://" + silentServer(t) + "/stream")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	conn, err := DialContext(ctx, u, 5*time.Second)
+	require.Nil(t, conn)
+	require.ErrorIs(t, err, context.Canceled)
 }
