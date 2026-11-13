@@ -1,6 +1,6 @@
 name: Doorbridge tests
 
-# Runs the WebRTC tests on pull requests against doorbridge and on pushes to
+# Runs the WebRTC, RTSP and keyframe tests on pull requests against doorbridge and on pushes to
 # doorbridge. Builds no images and pushes nothing (release.yml does that, on
 # schedule or by hand only). The 386 job covers the 32-bit platforms upstream
 # builds (386, arm/v6, arm/v7, mipsle), where int arithmetic overflows earlier.
@@ -43,7 +43,18 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      # The selections below deliberately avoid pre-existing failures
+      # (pkg/core does not build its tests, internal/streams has two red tests,
+      # and TestURLParse in pkg/rtsp hangs on the Go version this runner uses
+      # until the 10 min test timeout; tracked separately):
+      # the gate must only turn red for real defects. pkg/core is still
+      # compiled through pkg/rtsp.
       - name: go test
         env:
           GOARCH: ${{ matrix.goarch }}
-        run: go test ${{ matrix.flags }} ./pkg/webrtc/... ./internal/webrtc/...
+        run: go test ${{ matrix.flags }} -skip '^TestURLParse$' ./pkg/webrtc/... ./internal/webrtc/... ./pkg/rtsp/... ./internal/rtsp/... ./pkg/tcp/...
+
+      - name: go test (keyframe forwarding)
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go test ${{ matrix.flags }} -run 'Keyframe' ./internal/streams/
