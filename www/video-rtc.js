@@ -503,8 +503,10 @@ export class VideoRTC extends HTMLElement {
 
     async onwebrtc() {
         // Short-lived TURN credentials come from the server; fall back to the configured STUN servers.
+        const ws = this.ws;
         const iceServers = await this.fetchIceServers();
-        if (this.wsState === WebSocket.CLOSED) return; // disconnected while waiting
+        // the WebSocket was closed or replaced while waiting: its offer would be dropped
+        if (this.ws !== ws || this.wsState !== WebSocket.OPEN) return;
 
         const pc = new RTCPeerConnection(Object.assign({}, this.pcConfig, {iceServers}));
 
@@ -566,18 +568,21 @@ export class VideoRTC extends HTMLElement {
      * @return {Promise<RTCIceServer[]>}
      */
     async fetchIceServers() {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 2000);
         try {
             // same server as the WebSocket: ws(s)://host/api/ws?... => http(s)://host/api/webrtc/ice
             const url = 'http' + this.wsURL.substring(2, this.wsURL.indexOf('/ws')) + '/webrtc/ice';
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 2000);
             const r = await fetch(url, {credentials: 'same-origin', signal: ctrl.signal});
-            clearTimeout(timer);
             if (!r.ok) return this.pcConfig.iceServers;
             const data = await r.json();
-            return Array.isArray(data.ice_servers) && data.ice_servers.length ? data.ice_servers : this.pcConfig.iceServers;
+            // only replace the page's own iceServers when the server adds TURN credentials
+            const hasTurn = Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
+            return hasTurn ? data.ice_servers : this.pcConfig.iceServers;
         } catch (e) {
             return this.pcConfig.iceServers;
+        } finally {
+            clearTimeout(timer);
         }
     }
 

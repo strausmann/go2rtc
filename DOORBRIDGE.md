@@ -62,6 +62,10 @@ the `RTCPeerConnection` and fall back to the built-in STUN servers on any error 
   `api.username`/`password` or a reverse proxy, as for the rest of the API.
 - The browser-side fetch uses the same origin as the page (`video-rtc.js`: the host of the
   WebSocket). A cross-origin embed without CORS silently falls back to STUN.
+- `video-rtc.js` and the two HTML pages replace their own `iceServers` only when the response
+  contains an entry with credentials (TURN). Otherwise a host page's `pcConfig.iceServers` is kept.
+- Only `stun:`/`stuns:` URLs from `webrtc.ice_servers` are served to browsers. A static `turn:`
+  entry there is not forwarded (its credentials stay server-side); use `webrtc.turn` for browsers.
 - The repository has no JavaScript test framework; the fetch and fallback code is covered by the Go
   tests for the route only.
 
