@@ -565,14 +565,28 @@ export class VideoRTC extends HTMLElement {
     }
 
     /**
+     * Same server and base path as the WebSocket, only the trailing /ws segment is replaced:
+     * ws(s)://host/<base>/api/ws?src=... => http(s)://host/<base>/api/webrtc/ice
+     * @param wsURL {string}
+     * @return {string}
+     */
+    static iceURL(wsURL) {
+        const u = new URL(wsURL, location.href);
+        u.protocol = u.protocol === 'wss:' || u.protocol === 'https:' ? 'https:' : 'http:';
+        u.pathname = u.pathname.replace(/\/ws$/, '/webrtc/ice');
+        u.search = '';
+        u.hash = '';
+        return u.toString();
+    }
+
+    /**
      * @return {Promise<RTCIceServer[]>}
      */
     async fetchIceServers() {
         let timer;
         let ctrl = null;
         try {
-            // same server as the WebSocket: ws(s)://host/api/ws?... => http(s)://host/api/webrtc/ice
-            const url = 'http' + this.wsURL.substring(2, this.wsURL.indexOf('/ws')) + '/webrtc/ice';
+            const url = VideoRTC.iceURL(this.wsURL);
             // AbortController is missing on old browsers (e.g. iOS 11): still bound the wait to 2 s
             ctrl = typeof AbortController === 'function' ? new AbortController() : null;
             const timeout = new Promise(resolve => {
