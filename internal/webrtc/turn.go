@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/internal/api"
+	pion "github.com/pion/webrtc/v4"
 )
 
 const (
@@ -41,6 +43,26 @@ type iceConfig struct {
 }
 
 var currentICE iceConfig
+
+// browserICEServers maps the configured ice_servers to what browsers may see:
+// only stun:/stuns: URLs. Static turn: entries carry credentials from the config
+// and must never be served; without them the browser rejects the whole
+// RTCPeerConnection (InvalidAccessError). Entries that end up empty are dropped.
+func browserICEServers(in []pion.ICEServer) []iceServer {
+	var out []iceServer
+	for _, ice := range in {
+		var urls []string
+		for _, u := range ice.URLs {
+			if strings.HasPrefix(u, "stun:") || strings.HasPrefix(u, "stuns:") {
+				urls = append(urls, u)
+			}
+		}
+		if len(urls) > 0 {
+			out = append(out, iceServer{URLs: urls})
+		}
+	}
+	return out
+}
 
 // turnCredential returns time-limited TURN credentials: the username is
 // "<unix expiry>:<user>", the credential is base64(HMAC-SHA1(secret, username)).

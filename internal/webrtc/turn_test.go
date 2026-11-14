@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	pion "github.com/pion/webrtc/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -162,4 +163,28 @@ func TestICEHandlerNoStore(t *testing.T) {
 
 	w, _ := callICE(t, http.MethodGet)
 	require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+}
+
+func TestICEHandlerStaticTurnEntryNotServed(t *testing.T) {
+	const staticPass = "static-turn-pass"
+	in := []pion.ICEServer{
+		{URLs: []string{"stun:stun.example.org:3478"}},
+		{URLs: []string{"turn:turn.example.org:3478"}, Username: "static-user", Credential: staticPass},
+		{URLs: []string{"stun:stun2.example.org:3478", "turns:turn.example.org:443"}, Username: "u", Credential: staticPass},
+	}
+	setICEConfig(t, iceConfig{Servers: browserICEServers(in)})
+
+	w, res := callICE(t, http.MethodGet)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, res.IceServers, 2)
+	require.Equal(t, []string{"stun:stun.example.org:3478"}, res.IceServers[0].URLs)
+	require.Equal(t, []string{"stun:stun2.example.org:3478"}, res.IceServers[1].URLs)
+	body := w.Body.String()
+	for _, leak := range []string{staticPass, "static-user", "turn:", "turns:", "username", "credential"} {
+		require.NotContains(t, body, leak)
+	}
+}
+
+func TestBrowserICEServersDropsEmpty(t *testing.T) {
+	require.Empty(t, browserICEServers([]pion.ICEServer{{URLs: []string{"turn:turn.example.org:3478"}}}))
 }
