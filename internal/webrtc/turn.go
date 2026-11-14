@@ -16,6 +16,7 @@ import (
 const (
 	turnUser       = "doorbridge"
 	turnDefaultTTL = time.Hour
+	turnMaxTTL     = 24 * time.Hour
 )
 
 // timeNow is the clock used for credential expiry, swappable in tests.
@@ -43,6 +44,15 @@ type iceConfig struct {
 }
 
 var currentICE iceConfig
+
+// configureICE sets what iceHandler serves, from the webrtc config. Called by Init
+// before the route is registered. The secret is never logged.
+func configureICE(turn turnConfig, servers []pion.ICEServer) {
+	if turn.TTL > turnMaxTTL {
+		log.Warn().Dur("ttl", turn.TTL).Dur("max", turnMaxTTL).Msg("[webrtc] turn.ttl too large, using max")
+	}
+	currentICE = iceConfig{Servers: browserICEServers(servers), Turn: turn}
+}
 
 // browserICEServers maps the configured ice_servers to what browsers may see:
 // only stun:/stuns: URLs. Static turn: entries carry credentials from the config
@@ -78,6 +88,7 @@ func turnCredential(secret, user string, expiry time.Time) (username, credential
 // when webrtc.turn is configured. The secret itself is never part of the response.
 func iceHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -94,6 +105,8 @@ func iceHandler(w http.ResponseWriter, r *http.Request) {
 		ttl := cfg.Turn.TTL
 		if ttl <= 0 {
 			ttl = turnDefaultTTL
+		} else if ttl > turnMaxTTL {
+			ttl = turnMaxTTL
 		}
 		user, cred := turnCredential(cfg.Turn.Secret, turnUser, timeNow().Add(ttl))
 		servers = append(servers, iceServer{URLs: cfg.Turn.URLs, Username: user, Credential: cred})

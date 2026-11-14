@@ -155,6 +155,7 @@ func TestICEHandlerMethod(t *testing.T) {
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		w, _ := callICE(t, m)
 		require.Equal(t, http.StatusMethodNotAllowed, w.Code, m)
+		require.Equal(t, "GET", w.Header().Get("Allow"), m)
 	}
 }
 
@@ -187,4 +188,44 @@ func TestICEHandlerStaticTurnEntryNotServed(t *testing.T) {
 
 func TestBrowserICEServersDropsEmpty(t *testing.T) {
 	require.Empty(t, browserICEServers([]pion.ICEServer{{URLs: []string{"turn:turn.example.org:3478"}}}))
+}
+
+func TestICEHandlerTTLClamped(t *testing.T) {
+	setICEConfig(t, iceConfig{
+		Turn: turnConfig{URLs: []string{"turn:turn.example.org:3478"}, Secret: testSecret, TTL: 99999 * time.Hour},
+	})
+	now := time.Unix(1700000000, 0)
+	oldClock := timeNow
+	timeNow = func() time.Time { return now }
+	t.Cleanup(func() { timeNow = oldClock })
+
+	_, res := callICE(t, http.MethodGet)
+	require.Len(t, res.IceServers, 1)
+	expiryStr, _, _ := strings.Cut(res.IceServers[0].Username, ":")
+	expiry, err := strconv.ParseInt(expiryStr, 10, 64)
+	require.NoError(t, err)
+	require.InDelta(t, now.Add(24*time.Hour).Unix(), expiry, 5)
+}
+
+// configureICE is what Init calls: config in, handler output out.
+func TestConfigureICEWiring(t *testing.T) {
+	old := currentICE
+	t.Cleanup(func() { currentICE = old })
+
+	configureICE(
+		turnConfig{URLs: []string{"turn:turn.example.org:3478"}, Secret: testSecret},
+		[]pion.ICEServer{
+			{URLs: []string{"stun:stun.example.org:3478"}},
+			{URLs: []string{"turn:static.example.org:3478"}, Username: "static-user", Credential: "static-pass"},
+		},
+	)
+
+	w, res := callICE(t, http.MethodGet)
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, res.IceServers, 2)
+	require.Equal(t, []string{"stun:stun.example.org:3478"}, res.IceServers[0].URLs)
+	require.Equal(t, []string{"turn:turn.example.org:3478"}, res.IceServers[1].URLs)
+	require.NotEmpty(t, res.IceServers[1].Credential)
+	require.NotContains(t, w.Body.String(), "static")
+	require.NotContains(t, w.Body.String(), testSecret)
 }

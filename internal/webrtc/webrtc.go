@@ -99,8 +99,7 @@ func Init() {
 	}
 
 	// ICE servers for browsers, with short-lived TURN credentials (optional)
-	currentICE = iceConfig{Turn: cfg.Mod.Turn}
-	currentICE.Servers = browserICEServers(cfg.Mod.IceServers)
+	configureICE(cfg.Mod.Turn, cfg.Mod.IceServers)
 	api.HandleFunc("api/webrtc/ice", iceHandler)
 
 	// async WebRTC server (two API versions)

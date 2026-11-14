@@ -62,6 +62,14 @@ the `RTCPeerConnection` and fall back to the built-in STUN servers on any error 
   `api.username`/`password` or a reverse proxy, as for the rest of the API.
 - The browser-side fetch uses the same origin as the page (`video-rtc.js`: the host of the
   WebSocket). A cross-origin embed without CORS silently falls back to STUN.
+- `ttl` is capped at 24 h; larger values are clamped with a warning in the log (without the secret).
+- Put the secret only as `${TURN_SECRET}` in the config and never add `/api/config` to
+  `api.allow_paths`: without `allow_paths`, `GET /api/config` returns the raw config file.
+- The route has no authentication of its own. Whoever reaches go2rtc directly gets TURN credentials.
+  Expose `api.listen` only inside the proxy network (for example `api.listen: "172.18.0.5:1984"`
+  on a private Docker network, not `:1984` on all interfaces) and do not set `api.origin`.
+- All viewers share the user part `doorbridge`; abuse at the TURN server cannot be attributed to a
+  person, only to a credential's expiry window.
 - `video-rtc.js` and the two HTML pages replace their own `iceServers` only when the response
   contains an entry with credentials (TURN). Otherwise a host page's `pcConfig.iceServers` is kept.
 - Only `stun:`/`stuns:` URLs from `webrtc.ice_servers` are served to browsers. A static `turn:`
