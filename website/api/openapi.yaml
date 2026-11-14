@@ -418,6 +418,30 @@ paths:
                       type: array
                       items: { type: object }
 
+  /api/webrtc/ice:
+    get:
+      summary: Get ICE servers for browsers (Doorbridge fork)
+      description: |
+        Returns the configured `webrtc.ice_servers` and, when `webrtc.turn` is configured, one
+        additional entry with short-lived TURN credentials (TURN REST API, HMAC-SHA1). The shared
+        secret is never part of the response. Add `/api/webrtc/ice` to `api.allow_paths` if that
+        list is set.
+      tags: [ Consume stream ]
+      responses:
+        "200":
+          description: ICE servers
+          headers:
+            Cache-Control: { schema: { type: string }, example: no-store }
+          content:
+            application/json:
+              example:
+                ice_servers:
+                  - urls: [ "stun:stun.l.google.com:19302" ]
+                  - urls: [ "turn:turn.example.org:3478?transport=udp" ]
+                    username: "1700003600:doorbridge"
+                    credential: "WidxQdrlyT1WUf0p568o95rV5sA="
+        "405": { description: Method not allowed }
+
   /api/webrtc?src={src}:
     post:
       summary: Get stream in WebRTC format (WHEP)

@@ -461,7 +461,7 @@ app:
 
 api:
   # use only allowed API paths
-  allow_paths: [/api, /api/streams, /api/webrtc, /api/frame.jpeg]
+  allow_paths: [/api, /api/streams, /api/webrtc, /api/webrtc/ice, /api/frame.jpeg]
   # enable auth for localhost (used together with username and password)
   local_auth: true
 

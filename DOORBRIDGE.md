@@ -21,6 +21,51 @@ Changes that exist only in this fork.
 |---|---|
 | NACK limiter ([fork PR #4](https://github.com/strausmann/go2rtc/pull/4)) | Bounds NACK retransmission requests per WebRTC sender |
 | Keyframe on viewer request ([fork issue #5](https://github.com/strausmann/go2rtc/issues/5)) | Gets a fresh keyframe from a UniFi Protect camera when a WebRTC viewer asks for one |
+| Short-lived TURN credentials for browsers | `GET /api/webrtc/ice` hands browsers ICE servers with time-limited TURN credentials, so a coturn shared secret never reaches the page |
+
+### TURN credentials for the browser
+
+**Purpose.** Viewers behind a restrictive network need a TURN relay. A static username and password
+in `webrtc.ice_servers` would be visible to every page visitor. With coturn's `use-auth-secret`,
+go2rtc derives credentials per request instead: username `<unix expiry>:doorbridge`, credential
+`base64(HMAC-SHA1(secret, username))`.
+
+**Configuration.** Opt-in, off by default (no `urls` or no `secret` means off):
+
+```yaml
+webrtc:
+  turn:
+    urls:
+      - turn:turn.example.org:3478?transport=udp
+      - turn:turn.example.org:3478?transport=tcp
+      - turns:turn.example.org:443?transport=tcp
+    secret: ${TURN_SECRET}   # static-auth-secret of coturn
+    ttl: 1h                  # default 1h
+
+api:
+  allow_paths: [/api, /api/webrtc, /api/webrtc/ice]
+```
+
+> **Note.** `api.HandleFunc` silently does not register routes that are not in `api.allow_paths`.
+> When that list is set, `/api/webrtc/ice` must be added, otherwise the route returns 404 and the
+> web pages fall back to STUN only.
+
+**Behaviour.** `GET /api/webrtc/ice` returns `{"ice_servers": [...]}`: the configured
+`webrtc.ice_servers` first, then one TURN entry with fresh credentials. Other methods get `405`;
+the response is `Cache-Control: no-store`; the secret is neither logged nor part of the response.
+`www/webrtc.html`, `www/webrtc-sync.html` and `www/video-rtc.js` fetch the route before they create
+the `RTCPeerConnection` and fall back to the built-in STUN servers on any error or after 2 s.
+
+**Limits.**
+
+- Anyone who can reach the route gets credentials that are valid for `ttl`. Protect the API with
+  `api.username`/`password` or a reverse proxy, as for the rest of the API.
+- The browser-side fetch uses the same origin as the page (`video-rtc.js`: the host of the
+  WebSocket). A cross-origin embed without CORS silently falls back to STUN.
+- The repository has no JavaScript test framework; the fetch and fallback code is covered by the Go
+  tests for the route only.
+
+**Rollback.** Remove the `webrtc.turn` section.
 
 ### Keyframe on viewer request
 

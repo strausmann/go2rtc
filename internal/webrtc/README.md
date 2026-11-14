@@ -149,6 +149,28 @@ webrtc:
       credential: your_pass
 ```
 
+#### Hard tech way 3. TURN server with short-lived credentials (Doorbridge fork)
+
+For a coturn server with `use-auth-secret` (TURN REST API) the browser must not get the shared
+secret. Configure it under `webrtc.turn` instead: go2rtc then serves ICE servers with a username and
+credential that expire after `ttl` from `GET /api/webrtc/ice`, and the bundled web pages fetch them
+before they create the `RTCPeerConnection` (2 s timeout, fallback to the STUN servers).
+
+```yaml
+webrtc:
+  turn:
+    urls:
+      - turn:turn.example.org:3478?transport=udp
+      - turn:turn.example.org:3478?transport=tcp
+      - turns:turn.example.org:443?transport=tcp
+    secret: ${TURN_SECRET}  # same value as static-auth-secret in coturn; never sent to the browser
+    ttl: 1h                 # default 1h
+```
+
+Without `urls` or without `secret` the feature is off and the route returns only `ice_servers`.
+If `api.allow_paths` is set, add `/api/webrtc/ice`; routes outside that list are not registered.
+The response is `Cache-Control: no-store`.
+
 ### Full configuration
 
 **Important!** This example is not for copy/pasting!
