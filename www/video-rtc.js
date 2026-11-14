@@ -568,16 +568,26 @@ export class VideoRTC extends HTMLElement {
      * @return {Promise<RTCIceServer[]>}
      */
     async fetchIceServers() {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 2000);
+        let timer;
+        let ctrl = null;
         try {
             // same server as the WebSocket: ws(s)://host/api/ws?... => http(s)://host/api/webrtc/ice
             const url = 'http' + this.wsURL.substring(2, this.wsURL.indexOf('/ws')) + '/webrtc/ice';
-            const r = await fetch(url, {credentials: 'same-origin', signal: ctrl.signal});
-            if (!r.ok) return this.pcConfig.iceServers;
-            const data = await r.json();
+            // AbortController is missing on old browsers (e.g. iOS 11): still bound the wait to 2 s
+            ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timeout = new Promise(resolve => {
+                timer = setTimeout(() => {
+                    if (ctrl) ctrl.abort();
+                    resolve(null);
+                }, 2000);
+            });
+            const load = (async () => {
+                const r = await fetch(url, {credentials: 'same-origin', signal: ctrl ? ctrl.signal : undefined});
+                return r.ok ? await r.json() : null;
+            })();
+            const data = await Promise.race([load, timeout]);
             // only replace the page's own iceServers when the server adds TURN credentials
-            const hasTurn = Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
+            const hasTurn = data && Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
             return hasTurn ? data.ice_servers : this.pcConfig.iceServers;
         } catch (e) {
             return this.pcConfig.iceServers;

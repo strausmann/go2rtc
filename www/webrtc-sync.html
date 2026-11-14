@@ -21,14 +21,24 @@
 <script>
     // Short-lived TURN credentials come from the server; fall back to STUN only.
     async function fetchIceServers(fallback) {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 2000);
+        let timer;
+        let ctrl = null;
         try {
-            const r = await fetch('api/webrtc/ice', {credentials: 'same-origin', signal: ctrl.signal});
-            if (!r.ok) return fallback;
-            const data = await r.json();
-            // only replace the built-in STUN servers when the server adds TURN credentials
-            const hasTurn = Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
+            // AbortController is missing on old browsers (e.g. iOS 11): still bound the wait to 2 s
+            ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timeout = new Promise(resolve => {
+                timer = setTimeout(() => {
+                    if (ctrl) ctrl.abort();
+                    resolve(null);
+                }, 2000);
+            });
+            const load = (async () => {
+                const r = await fetch('api/webrtc/ice', {credentials: 'same-origin', signal: ctrl ? ctrl.signal : undefined});
+                return r.ok ? await r.json() : null;
+            })();
+            const data = await Promise.race([load, timeout]);
+            // only replace the fallback when the server adds TURN credentials
+            const hasTurn = data && Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
             return hasTurn ? data.ice_servers : fallback;
         } catch (e) {
             return fallback;
