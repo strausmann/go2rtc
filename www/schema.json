@@ -629,6 +629,34 @@
             }
           }
         },
+        "turn": {
+          "description": "TURN server with short-lived credentials (coturn use-auth-secret), served by /api/webrtc/ice",
+          "type": "object",
+          "properties": {
+            "urls": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "examples": [
+                  "turn:turn.example.org:3478?transport=udp",
+                  "turns:turn.example.org:443?transport=tcp"
+                ]
+              }
+            },
+            "secret": {
+              "description": "Shared secret (static-auth-secret of coturn). Never sent to the browser",
+              "type": "string"
+            },
+            "ttl": {
+              "description": "Lifetime of the issued credentials",
+              "type": "string",
+              "default": "1h",
+              "examples": [
+                "1h"
+              ]
+            }
+          }
+        },
         "filters": {
           "type": "object",
           "properties": {

@@ -501,8 +501,14 @@ export class VideoRTC extends HTMLElement {
         };
     }
 
-    onwebrtc() {
-        const pc = new RTCPeerConnection(this.pcConfig);
+    async onwebrtc() {
+        // Short-lived TURN credentials come from the server; fall back to the configured STUN servers.
+        const ws = this.ws;
+        const iceServers = await this.fetchIceServers();
+        // the WebSocket was closed or replaced while waiting: its offer would be dropped
+        if (this.ws !== ws || this.wsState !== WebSocket.OPEN) return;
+
+        const pc = new RTCPeerConnection(Object.assign({}, this.pcConfig, {iceServers}));
 
         pc.addEventListener('icecandidate', ev => {
             if (ev.candidate && this.mode.includes('webrtc/tcp') && ev.candidate.protocol === 'udp') return;
@@ -556,6 +562,52 @@ export class VideoRTC extends HTMLElement {
 
         this.pcState = WebSocket.CONNECTING;
         this.pc = pc;
+    }
+
+    /**
+     * Same server and base path as the WebSocket, only the trailing /ws segment is replaced:
+     * ws(s)://host/<base>/api/ws?src=... => http(s)://host/<base>/api/webrtc/ice
+     * @param wsURL {string}
+     * @return {string}
+     */
+    static iceURL(wsURL) {
+        const u = new URL(wsURL, location.href);
+        u.protocol = u.protocol === 'wss:' || u.protocol === 'https:' ? 'https:' : 'http:';
+        u.pathname = u.pathname.replace(/\/ws$/, '/webrtc/ice');
+        u.search = '';
+        u.hash = '';
+        return u.toString();
+    }
+
+    /**
+     * @return {Promise<RTCIceServer[]>}
+     */
+    async fetchIceServers() {
+        let timer;
+        let ctrl = null;
+        try {
+            const url = VideoRTC.iceURL(this.wsURL);
+            // AbortController is missing on old browsers (e.g. iOS 11): still bound the wait to 2 s
+            ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timeout = new Promise(resolve => {
+                timer = setTimeout(() => {
+                    if (ctrl) ctrl.abort();
+                    resolve(null);
+                }, 2000);
+            });
+            const load = (async () => {
+                const r = await fetch(url, {credentials: 'same-origin', signal: ctrl ? ctrl.signal : undefined});
+                return r.ok ? await r.json() : null;
+            })();
+            const data = await Promise.race([load, timeout]);
+            // only replace the page's own iceServers when the server adds TURN credentials
+            const hasTurn = data && Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
+            return hasTurn ? data.ice_servers : this.pcConfig.iceServers;
+        } catch (e) {
+            return this.pcConfig.iceServers;
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     /**

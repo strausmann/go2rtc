@@ -22,6 +22,7 @@ func Init() {
 			Candidates []string         `yaml:"candidates"`
 			IceServers []pion.ICEServer `yaml:"ice_servers"`
 			Filters    webrtc.Filters   `yaml:"filters"`
+			Turn       turnConfig       `yaml:"turn"`
 		} `yaml:"webrtc"`
 	}
 
@@ -96,6 +97,10 @@ func Init() {
 			return serverAPI.NewPeerConnection(pionConf)
 		}
 	}
+
+	// ICE servers for browsers, with short-lived TURN credentials (optional)
+	configureICE(cfg.Mod.Turn, cfg.Mod.IceServers)
+	api.HandleFunc("api/webrtc/ice", iceHandler)
 
 	// async WebRTC server (two API versions)
 	ws.HandleFunc("webrtc", asyncHandler)
