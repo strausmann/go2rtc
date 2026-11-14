@@ -46,7 +46,7 @@ func callICE(t *testing.T, method string) (*httptest.ResponseRecorder, iceRespon
 func TestTurnCredentialKnownVector(t *testing.T) {
 	user, cred := turnCredential("s3cret", "doorbridge", time.Unix(1700003600, 0))
 	require.Equal(t, "1700003600:doorbridge", user)
-	require.Equal(t, "WidxQdrlyT1WUf0p568o95rV5sA=", cred)
+	require.Equal(t, "WidxQdrlyT1WUf0p568o95rV5sA=", cred) // ggignore: public test vector, HMAC-SHA1("s3cret", "1700003600:doorbridge")
 }
 
 func TestICEHandlerWithoutTurn(t *testing.T) {

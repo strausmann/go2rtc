@@ -439,7 +439,7 @@ paths:
                   - urls: [ "stun:stun.l.google.com:19302" ]
                   - urls: [ "turn:turn.example.org:3478?transport=udp" ]
                     username: "1700003600:doorbridge"
-                    credential: "WidxQdrlyT1WUf0p568o95rV5sA="
+                    credential: "<base64 HMAC-SHA1(secret, username)>"
         "405": { description: Method not allowed }
 
   /api/webrtc?src={src}:
