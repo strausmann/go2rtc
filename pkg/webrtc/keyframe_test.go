@@ -1,10 +1,14 @@
 package webrtc
 
 import (
+	"errors"
+	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -95,4 +99,88 @@ func TestKeyframeRequest(t *testing.T) {
 			break
 		}
 	}
+}
+
+// rtcpReads returns a reader that replays errs (nil = PLI packet) and counts
+// the remaining reads
+func rtcpReads(t *testing.T, errs ...error) (func([]byte) (int, interceptor.Attributes, error), *[]error) {
+	pli, err := rtcp.Marshal([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: 1}})
+	require.Nil(t, err)
+
+	read := func(b []byte) (int, interceptor.Attributes, error) {
+		err := errs[0]
+		errs = errs[1:]
+		if err != nil {
+			return 0, nil, err
+		}
+		return copy(b, pli), nil, nil
+	}
+	return read, &errs
+}
+
+// TestReadRTCPSkipsBrokenPackets - a failed read must not end the loop,
+// a later PLI still reaches the handler
+func TestReadRTCPSkipsBrokenPackets(t *testing.T) {
+	read, left := rtcpReads(t, errors.New("broken packet"), io.ErrShortBuffer, nil, io.EOF)
+
+	var calls int
+	c := &Conn{}
+	c.OnKeyframeRequest(func() { calls++ })
+	c.readRTCP(read)
+	require.Equal(t, 1, calls)
+	require.Empty(t, *left)
+}
+
+// TestReadRTCPWithoutHandler - the NACK responder needs the reads, so the loop
+// consumes packets until the reader is closed, also without a handler
+func TestReadRTCPWithoutHandler(t *testing.T) {
+	read, left := rtcpReads(t, nil, nil, errors.New("broken packet"), nil, io.ErrClosedPipe)
+
+	c := &Conn{}
+	c.readRTCP(read)
+	require.Empty(t, *left)
+}
+
+// TestReadRTCPLateHandler - a handler set after the loop started gets later PLI
+func TestReadRTCPLateHandler(t *testing.T) {
+	pli, err := rtcp.Marshal([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: 1}})
+	require.Nil(t, err)
+
+	packets := make(chan []byte)
+	read := func(b []byte) (int, interceptor.Attributes, error) {
+		p, ok := <-packets
+		if !ok {
+			return 0, nil, io.EOF
+		}
+		return copy(b, p), nil, nil
+	}
+
+	c := &Conn{}
+	done := make(chan struct{})
+	go func() {
+		c.readRTCP(read)
+		close(done)
+	}()
+
+	packets <- pli // the loop is running, no handler yet
+
+	// the first PLI may still meet the new handler, so count instead of expecting one
+	var calls atomic.Int32
+	c.OnKeyframeRequest(func() { calls.Add(1) })
+	packets <- pli
+	close(packets)
+	<-done
+
+	require.Positive(t, calls.Load(), "late handler got no keyframe request")
+}
+
+// TestReadRTCPStopsAfterTooManyErrors - a reader that only fails ends the loop
+func TestReadRTCPStopsAfterTooManyErrors(t *testing.T) {
+	var reads int
+	read := func([]byte) (int, interceptor.Attributes, error) {
+		reads++
+		return 0, nil, errors.New("broken packet")
+	}
+	(&Conn{}).readRTCP(read)
+	require.Equal(t, maxRTCPReadErrors, reads)
 }

@@ -8,6 +8,16 @@ import (
 )
 
 func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
+	return s.addConsumer(cons, cons.GetMedias(), true)
+}
+
+// AddConsumerMedias - match new medias of already added consumer.
+// For example, after WebRTC renegotiation (enable two-way audio).
+func (s *Stream) AddConsumerMedias(cons core.Consumer, medias []*core.Media) (err error) {
+	return s.addConsumer(cons, medias, false)
+}
+
+func (s *Stream) addConsumer(cons core.Consumer, consMedias []*core.Media, isNew bool) (err error) {
 	// support for multiple simultaneous pending from different consumers
 	consN := s.pending.Add(1) - 1
 
@@ -16,7 +26,6 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
 	var prodStarts []*Producer
 
 	// Step 1. Get consumer medias
-	consMedias := cons.GetMedias()
 	for _, consMedia := range consMedias {
 		log.Trace().Msgf("[streams] check cons=%d media=%s", consN, consMedia)
 
@@ -102,14 +111,16 @@ func (s *Stream) AddConsumer(cons core.Consumer) (err error) {
 		return formatError(consMedias, prodMedias, prodErrors)
 	}
 
-	// ex. WebRTC viewer sends PLI/FIR
-	if k, ok := cons.(interface{ OnKeyframeRequest(func()) }); ok {
-		k.OnKeyframeRequest(s.RequestKeyframe)
-	}
+	if isNew {
+		// ex. WebRTC viewer sends PLI/FIR
+		if k, ok := cons.(interface{ OnKeyframeRequest(func()) }); ok {
+			k.OnKeyframeRequest(s.RequestKeyframe)
+		}
 
-	s.mu.Lock()
-	s.consumers = append(s.consumers, cons)
-	s.mu.Unlock()
+		s.mu.Lock()
+		s.consumers = append(s.consumers, cons)
+		s.mu.Unlock()
+	}
 
 	// there may be duplicates, but that's not a problem
 	for _, prod := range prodStarts {
