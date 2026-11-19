@@ -14,8 +14,10 @@ const (
 	KeyframeResetup = "resetup"
 
 	keyframeInterval = time.Second
-	keyframeTimeout  = 3 * time.Second
 )
+
+// keyframeTimeout limits the whole helper session after dial, it is a variable for tests
+var keyframeTimeout = 3 * time.Second
 
 // RequestKeyframe asks the camera for a keyframe with a short helper session.
 // Disabled by default, enabled with the option `#keyframe=resetup`. It never
@@ -59,7 +61,9 @@ func (c *Conn) keyframeSession() error {
 	}
 	defer h.Close() // sends TEARDOWN after DESCRIBE, then closes the connection
 
-	_ = h.conn.SetDeadline(time.Now().Add(keyframeTimeout))
+	// the deadlines of Do/WriteRequest are per request, so bound the whole session
+	timer := time.AfterFunc(keyframeTimeout, func() { _ = h.conn.Close() })
+	defer timer.Stop()
 
 	if err := h.Describe(); err != nil {
 		return err

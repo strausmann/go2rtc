@@ -94,7 +94,15 @@ func (c *keyframeCamera) waitClosed(t *testing.T) {
 	}
 }
 
+// setTimeout sets the global Timeout, other tests of the package leave it very short
+func setTimeout(t *testing.T) {
+	old := Timeout
+	Timeout = 5 * time.Second
+	t.Cleanup(func() { Timeout = old })
+}
+
 func TestRequestKeyframe(t *testing.T) {
+	setTimeout(t)
 	camera := newKeyframeCamera(t)
 
 	conn := NewClient(camera.uri)
@@ -129,6 +137,7 @@ func TestRequestKeyframe(t *testing.T) {
 }
 
 func TestRequestKeyframeDisabled(t *testing.T) {
+	setTimeout(t)
 	camera := newKeyframeCamera(t)
 
 	conn := NewClient(camera.uri) // option is not set
@@ -139,6 +148,7 @@ func TestRequestKeyframeDisabled(t *testing.T) {
 }
 
 func TestRequestKeyframeError(t *testing.T) {
+	setTimeout(t)
 	ln, err := net.Listen("tcp", "localhost:0")
 	require.Nil(t, err)
 	uri := "rtsp://" + ln.Addr().String() + "/stream"
@@ -158,4 +168,24 @@ func TestRequestKeyframeError(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no error")
 	}
+}
+
+// a camera that never answers can't block the helper session
+func TestRequestKeyframeTimeout(t *testing.T) {
+	setTimeout(t)
+
+	old := keyframeTimeout
+	keyframeTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { keyframeTimeout = old })
+
+	ln, err := net.Listen("tcp", "localhost:0")
+	require.Nil(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	conn := NewClient("rtsp://" + ln.Addr().String() + "/stream")
+	conn.Keyframe = KeyframeResetup
+
+	conn.RequestKeyframe()
+
+	require.Eventually(t, func() bool { return conn.keyframeNext.Load() != math.MaxInt64 }, 2*time.Second, 5*time.Millisecond)
 }
