@@ -1,10 +1,23 @@
 package webrtc
 
 import (
+	"errors"
+	"io"
+	"net"
+
 	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 )
+
+// maxRTCPReadErrors ends the RTCP read loop of a sender after this many
+// consecutive failed reads.
+const maxRTCPReadErrors = 64
+
+// rtcpReadDone reports whether err means the RTCP reader is closed for good.
+func rtcpReadDone(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed)
+}
 
 // OnKeyframeRequest sets the handler for PLI/FIR from the remote side.
 // The handler is called from the RTCP read loop and must not block.

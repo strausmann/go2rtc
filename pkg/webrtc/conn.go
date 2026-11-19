@@ -147,11 +147,18 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
 				for _, sender := range pc.GetSenders() {
 					go func(sender *webrtc.RTPSender) {
 						buf := make([]byte, 1500)
+						errs := 0
 						for {
 							n, attr, err := sender.Read(buf)
 							if err != nil {
-								return
+								// The NACK limiter reports an unparsable packet as a read
+								// error: skip it, end only when the sender is closed.
+								if errs++; rtcpReadDone(err) || errs >= maxRTCPReadErrors {
+									return
+								}
+								continue
 							}
+							errs = 0
 							c.handleKeyframeRequest(sender, buf[:n], attr)
 						}
 					}(sender)
