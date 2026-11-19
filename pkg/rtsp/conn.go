@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -24,6 +25,7 @@ type Conn struct {
 	// public
 
 	Backchannel bool
+	Keyframe    string // KeyframeResetup enables RequestKeyframe
 	Media       string
 	OnClose     func() error
 	PacketSize  uint16
@@ -32,11 +34,6 @@ type Conn struct {
 	Transport   string // custom transport support, ex. RTSP over WebSocket
 
 	URL *url.URL
-
-	// Keyframe enables RequestKeyframe; the only supported value is KeyframeResetup
-	Keyframe string
-	// OnKeyframe is called after each helper session of RequestKeyframe
-	OnKeyframe func(err error, took time.Duration)
 
 	// internal
 
@@ -57,18 +54,9 @@ type Conn struct {
 	udpConn []*net.UDPConn
 	udpAddr []*net.UDPAddr
 
-	// noRedirect makes Do fail on 301/302 instead of dialing the new location
-	noRedirect bool
-
-	// keyframe helper session (RequestKeyframe)
-	kfMu     sync.Mutex
-	kfBusy   bool
-	kfClosed bool
-	kfLast   time.Time
-	kfRaw    net.Conn           // raw connection of the running helper session
-	kfCancel context.CancelFunc // aborts the dial of the running helper session
-	kfWG     sync.WaitGroup
-	kfNow    func() time.Time // nil = time.Now
+	keyframeNext atomic.Int64 // earliest time of the next RequestKeyframe
+	keyframeURI  atomic.Value // string, c.uri after redirects, safe to read from the helper
+	noRedirect   bool         // Do fails on 301/302 instead of dialing the new location
 }
 
 const (

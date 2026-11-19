@@ -39,9 +39,6 @@ type Producer struct {
 
 const SourceTemplate = "{input}"
 
-// errProducerBusy is returned by RequestKeyframe when the producer mutex is held.
-var errProducerBusy = errors.New("streams: producer busy")
-
 func NewProducer(source string) *Producer {
 	if strings.Contains(source, SourceTemplate) {
 		return &Producer{template: source}
@@ -135,22 +132,18 @@ func (p *Producer) AddTrack(media *core.Media, codec *core.Codec, track *core.Re
 	return nil
 }
 
-// RequestKeyframe asks the current connection for a new keyframe. It is called
-// from viewer RTCP read loops, so it never waits for the producer mutex and
-// calls the connection only after releasing it. While the mutex is held (dial
-// or reconnect of the source) the request is dropped; the viewer repeats the
-// PLI if it still needs a keyframe.
-func (p *Producer) RequestKeyframe() error {
+// requestKeyframe asks the source for a keyframe, if it supports that.
+func (p *Producer) requestKeyframe() {
+	// Dial holds the lock while connecting, the caller must not wait for it
 	if !p.mu.TryLock() {
-		return errProducerBusy
+		return
 	}
 	conn := p.conn
 	p.mu.Unlock()
 
-	if r, ok := conn.(core.KeyframeRequester); ok {
-		return r.RequestKeyframe()
+	if k, ok := conn.(interface{ RequestKeyframe() }); ok {
+		k.RequestKeyframe()
 	}
-	return core.ErrKeyframeUnsupported
 }
 
 func (p *Producer) MarshalJSON() ([]byte, error) {
