@@ -19,6 +19,7 @@ Changes that exist only in this fork.
 | Addition | Purpose |
 |---|---|
 | NACK limiter ([fork PR #4](https://github.com/strausmann/go2rtc/pull/4)) | Bounds NACK retransmission requests per WebRTC sender |
+| Keyframe on viewer request (slim version of upstream PR candidate) | Gets a fresh keyframe from a UniFi Protect camera when a WebRTC viewer sends PLI/FIR |
 | Short-lived TURN credentials for browsers | `GET /api/webrtc/ice` hands browsers ICE servers with time-limited TURN credentials, so a coturn shared secret never reaches the page |
 
 ### TURN credentials for the browser
@@ -76,6 +77,23 @@ the `RTCPeerConnection` and fall back to the built-in STUN servers on any error 
   tests for the route only.
 
 **Rollback.** Remove the `webrtc.turn` section.
+
+### Keyframe on viewer request
+
+UniFi Protect ignores PLI/FIR and sends a keyframe only every GOP, but it sends one when a new RTSP
+session sets up the video track. Opt-in per source, off by default:
+
+```yaml
+streams:
+  doorbell: rtspx://protect-host:7441/camera-token#keyframe=resetup
+```
+
+The existing RTCP read loop of the WebRTC senders (upstream PR 2486) reports PLI/FIR of video
+senders to the stream, which asks its RTSP producers for a keyframe. A producer with the option
+opens a short helper session (DESCRIBE, SETUP video, TEARDOWN, no PLAY) on its own connection: at
+most one at a time and one per second, bounded to 3 s, failures only at trace level. WebSocket
+transports are not supported. A viewer that keeps sending PLI raises the keyframe rate of the shared
+encoder to at most one per second. **Rollback:** remove `#keyframe=resetup`.
 
 ## Branch model
 
