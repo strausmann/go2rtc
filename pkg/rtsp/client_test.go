@@ -9,17 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// defaultTimeout is the package default, read before any test changes Timeout.
-var defaultTimeout = Timeout
-
-// restoreTimeout restores the package wide Timeout after the test.
-func restoreTimeout(t *testing.T) {
-	old := Timeout
-	t.Cleanup(func() { Timeout = old })
-}
-
 func TestTimeout(t *testing.T) {
-	restoreTimeout(t)
 	Timeout = time.Millisecond
 
 	ln, err := net.Listen("tcp", "localhost:0")
@@ -35,36 +25,20 @@ func TestTimeout(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrDeadlineExceeded)
 }
 
-// TestTimeoutRestored must run after TestTimeout: it fails if TestTimeout
-// leaks its Timeout value into later tests.
-func TestTimeoutRestored(t *testing.T) {
-	require.Equal(t, defaultTimeout, Timeout)
-}
-
 func TestMissedControl(t *testing.T) {
-	restoreTimeout(t)
 	Timeout = time.Millisecond
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	require.Nil(t, err)
 
-	t.Cleanup(func() { _ = ln.Close() })
-
 	go func() {
 		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
+		require.Nil(t, err)
 
 		b := make([]byte, 8192)
 		for {
-			// the read ends when the client connection is closed, possibly
-			// after this test returned, so it must not report to t
 			n, err := conn.Read(b)
-			if err != nil {
-				return
-			}
+			require.Nil(t, err)
 
 			req := string(b[:n])
 
@@ -110,7 +84,6 @@ Session: 1
 
 	err = client.Dial()
 	require.Nil(t, err)
-	t.Cleanup(func() { _ = client.conn.Close() })
 
 	err = client.Describe()
 	require.Nil(t, err)

@@ -42,7 +42,6 @@ Format: `rtsp...#{param1}#{param2}#{param3}`
 - Ignore audio - `#media=video` or ignore video - `#media=audio`
 - Ignore two-way audio API `#backchannel=0` - important for some glitchy cameras
 - Use WebSocket transport `#transport=ws...`
-- Request a keyframe from the source when a WebRTC viewer asks for one `#keyframe=resetup` (UniFi Protect, see DOORBRIDGE.md)
 
 ### RTSP over WebSocket
 

@@ -24,11 +24,6 @@ type Conn struct {
 	offer    string
 	closed   core.Waiter
 	rtcpOnce sync.Once
-
-	// keyframeMu guards keyframeHandlers only; never hold it across I/O or a
-	// handler call.
-	keyframeMu       sync.Mutex
-	keyframeHandlers map[string]func() // by MID, see OnKeyframeRequest
 }
 
 func NewConn(pc *webrtc.PeerConnection) *Conn {
@@ -144,10 +139,16 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
 			// Pion's NACK responder runs while RTCP is read. Without this,
 			// receivers request missing RTP packets but never receive repairs.
 			// Start only once; an ICE transition must not add competing readers.
-			// The same loop reports PLI/FIR to OnKeyframeRequest handlers.
 			c.rtcpOnce.Do(func() {
 				for _, sender := range pc.GetSenders() {
-					go c.readSenderRTCP(sender)
+					go func(sender *webrtc.RTPSender) {
+						buf := make([]byte, 1500)
+						for {
+							if _, _, err := sender.Read(buf); err != nil {
+								return
+							}
+						}
+					}(sender)
 				}
 			})
 			for _, sender := range c.Senders {
