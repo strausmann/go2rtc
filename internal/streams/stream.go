@@ -2,6 +2,7 @@ package streams
 
 import (
 	"encoding/json"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -74,6 +75,17 @@ func (s *Stream) RemoveConsumer(cons core.Consumer) {
 	s.mu.Unlock()
 
 	s.stopProducers()
+}
+
+// RequestKeyframe asks the sources for a keyframe, ex. on WebRTC PLI/FIR.
+func (s *Stream) RequestKeyframe() {
+	s.mu.Lock()
+	producers := slices.Clone(s.producers)
+	s.mu.Unlock()
+
+	for _, prod := range producers {
+		prod.requestKeyframe()
+	}
 }
 
 func (s *Stream) AddProducer(prod core.Producer) {

@@ -26,7 +26,8 @@ func NewClient(uri string) *Conn {
 			ID:         core.NewID(),
 			FormatName: "rtsp",
 		},
-		uri: uri,
+		uri:         uri,
+		keyframeURI: uri,
 	}
 }
 

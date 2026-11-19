@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -24,6 +25,7 @@ type Conn struct {
 	// public
 
 	Backchannel bool
+	Keyframe    string // KeyframeResetup enables RequestKeyframe
 	Media       string
 	OnClose     func() error
 	PacketSize  uint16
@@ -51,6 +53,9 @@ type Conn struct {
 
 	udpConn []*net.UDPConn
 	udpAddr []*net.UDPAddr
+
+	keyframeNext atomic.Int64 // earliest time of the next RequestKeyframe
+	keyframeURI  string
 }
 
 const (
