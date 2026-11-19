@@ -184,18 +184,15 @@ func (l *nackLimiter) BindRTCPReader(reader interceptor.RTCPReader) interceptor.
 	})
 }
 
-// marshalWithoutEmptyNacks marshals pkts but skips NACKs the limiter emptied.
-// A NACK without FCI is invalid (RFC 4585 6.2.1) and rtcp.Unmarshal rejects
-// it together with the rest of the compound, e.g. a PLI next to it. The
-// cached slice is left as is, so the responder still sees the emptied NACK.
-// If every packet is skipped, rtcp.Marshal returns no bytes.
+// marshalWithoutEmptyNacks skips NACKs the limiter emptied. A NACK without FCI
+// is invalid (RFC 4585 6.2.1) and rtcp.Unmarshal rejects it with the rest of
+// the compound, ex. a PLI next to it. The responder still gets the cached packets.
 func marshalWithoutEmptyNacks(pkts []rtcp.Packet) ([]byte, error) {
-	keep := make([]rtcp.Packet, 0, len(pkts))
+	var keep []rtcp.Packet
 	for _, pkt := range pkts {
-		if nack, ok := pkt.(*rtcp.TransportLayerNack); ok && len(nack.Nacks) == 0 {
-			continue
+		if nack, ok := pkt.(*rtcp.TransportLayerNack); !ok || len(nack.Nacks) > 0 {
+			keep = append(keep, pkt)
 		}
-		keep = append(keep, pkt)
 	}
 	return rtcp.Marshal(keep)
 }

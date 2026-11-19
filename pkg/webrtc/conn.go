@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -25,8 +24,6 @@ type Conn struct {
 	offer    string
 	closed   core.Waiter
 	rtcpOnce sync.Once
-
-	keyframe atomic.Pointer[func()]
 }
 
 func NewConn(pc *webrtc.PeerConnection) *Conn {
@@ -142,26 +139,11 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
 			// Pion's NACK responder runs while RTCP is read. Without this,
 			// receivers request missing RTP packets but never receive repairs.
 			// Start only once; an ICE transition must not add competing readers.
-			// The same loop reports PLI/FIR to the OnKeyframeRequest handler.
+			// The same reader passes PLI/FIR to the source of the track.
 			c.rtcpOnce.Do(func() {
 				for _, sender := range pc.GetSenders() {
-					go func(sender *webrtc.RTPSender) {
-						buf := make([]byte, 1500)
-						errs := 0
-						for {
-							n, attr, err := sender.Read(buf)
-							if err != nil {
-								// The NACK limiter reports an unparsable packet as a read
-								// error: skip it, end only when the sender is closed.
-								if errs++; rtcpReadDone(err) || errs >= maxRTCPReadErrors {
-									return
-								}
-								continue
-							}
-							errs = 0
-							c.handleKeyframeRequest(sender, buf[:n], attr)
-						}
-					}(sender)
+					track, _ := sender.Track().(*Track)
+					go readRTCP(sender.Read, track)
 				}
 			})
 			for _, sender := range c.Senders {
@@ -232,6 +214,11 @@ func (c *Conn) getMediaCodec(remote *webrtc.TrackRemote) (*core.Media, *core.Cod
 				return media, codec
 			}
 		}
+	}
+
+	// consumer can get unknown track after renegotiation, skip it instead of crashing
+	if c.Mode == core.ModePassiveConsumer {
+		return nil, nil
 	}
 
 	// fix moment when core.ModePassiveProducer or core.ModeActiveProducer

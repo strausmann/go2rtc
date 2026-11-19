@@ -25,7 +25,7 @@ type Conn struct {
 	// public
 
 	Backchannel bool
-	Keyframe    string // KeyframeResetup enables RequestKeyframe
+	Keyframe    string // KeyframeResetup: video tracks request keyframes with RequestKeyframe
 	Media       string
 	OnClose     func() error
 	PacketSize  uint16
@@ -37,16 +37,17 @@ type Conn struct {
 
 	// internal
 
-	auth      *tcp.Auth
-	conn      net.Conn
-	keepalive int
-	mode      core.Mode
-	playOK    bool
-	playErr   error
-	reader    *bufio.Reader
-	sequence  int
-	session   string
-	uri       string
+	auth        *tcp.Auth
+	backchannel *Conn // separate session for backchannel, added while playing
+	conn        net.Conn
+	keepalive   int
+	mode        core.Mode
+	playOK      bool
+	playErr     error
+	reader      *bufio.Reader
+	sequence    int
+	session     string
+	uri         string
 
 	state   State
 	stateMu sync.Mutex
@@ -55,8 +56,6 @@ type Conn struct {
 	udpAddr []*net.UDPAddr
 
 	keyframeNext atomic.Int64 // earliest time of the next RequestKeyframe
-	keyframeURI  atomic.Value // string, c.uri after redirects, safe to read from the helper
-	noRedirect   bool         // Do fails on 301/302 instead of dialing the new location
 }
 
 const (

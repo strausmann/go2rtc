@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
-	"github.com/AlexxIT/go2rtc/pkg/creds"
 )
 
 type state byte
@@ -132,25 +131,11 @@ func (p *Producer) AddTrack(media *core.Media, codec *core.Codec, track *core.Re
 	return nil
 }
 
-// requestKeyframe asks the source for a keyframe, if it supports that.
-func (p *Producer) requestKeyframe() {
-	// Dial holds the lock while connecting, the caller must not wait for it
-	if !p.mu.TryLock() {
-		return
-	}
-	conn := p.conn
-	p.mu.Unlock()
-
-	if k, ok := conn.(interface{ RequestKeyframe() }); ok {
-		k.RequestKeyframe()
-	}
-}
-
 func (p *Producer) MarshalJSON() ([]byte, error) {
 	if conn := p.conn; conn != nil {
 		return json.Marshal(conn)
 	}
-	info := map[string]string{"url": creds.SecretString(p.url)}
+	info := map[string]string{"url": p.url}
 	return json.Marshal(info)
 }
 
@@ -164,7 +149,7 @@ func (p *Producer) start() {
 		return
 	}
 
-	log.Debug().Msgf("[streams] start producer url=%s", creds.SecretString(p.url))
+	log.Debug().Msgf("[streams] start producer url=%s", p.url)
 
 	p.state = stateStart
 	p.workerID++
@@ -182,7 +167,7 @@ func (p *Producer) worker(conn core.Producer, workerID int) {
 			return
 		}
 
-		log.Warn().Err(err).Str("url", creds.SecretString(p.url)).Caller().Send()
+		log.Warn().Err(err).Str("url", p.url).Caller().Send()
 	}
 
 	p.reconnect(workerID, 0)
@@ -193,11 +178,11 @@ func (p *Producer) reconnect(workerID, retry int) {
 	defer p.mu.Unlock()
 
 	if p.workerID != workerID {
-		log.Trace().Msgf("[streams] stop reconnect url=%s", creds.SecretString(p.url))
+		log.Trace().Msgf("[streams] stop reconnect url=%s", p.url)
 		return
 	}
 
-	log.Debug().Msgf("[streams] retry=%d to url=%s", retry, creds.SecretString(p.url))
+	log.Debug().Msgf("[streams] retry=%d to url=%s", retry, p.url)
 
 	conn, err := GetProducer(p.url)
 	if err != nil {
@@ -272,7 +257,7 @@ func (p *Producer) stop() {
 		p.workerID++
 	}
 
-	log.Debug().Msgf("[streams] stop producer url=%s", creds.SecretString(p.url))
+	log.Debug().Msgf("[streams] stop producer url=%s", p.url)
 
 	if p.conn != nil {
 		_ = p.conn.Stop()

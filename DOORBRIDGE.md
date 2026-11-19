@@ -10,7 +10,14 @@ cameras and doorbells) before that change is available in an upstream release.
 | Upstream PR | Purpose |
 |---|---|
 | [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
+| [AlexxIT/go2rtc#2685](https://github.com/AlexxIT/go2rtc/pull/2685) | Request a source keyframe when a WebRTC viewer sends PLI/FIR (`#keyframe=resetup`), reworked version on top of upstream `bdf7eee` |
+
+Merged upstream and no longer carried as fork changes:
+
+| Upstream PR | Purpose |
+|---|---|
 | [AlexxIT/go2rtc#2486](https://github.com/AlexxIT/go2rtc/pull/2486) | Read RTCP feedback from WebRTC senders so pion's NACK responder can retransmit lost packets |
+| [AlexxIT/go2rtc#2684](https://github.com/AlexxIT/go2rtc/pull/2684) | NACK retransmission limiter (formerly fork PR #4) |
 
 ## Fork additions
 
@@ -18,8 +25,7 @@ Changes that exist only in this fork.
 
 | Addition | Purpose |
 |---|---|
-| NACK limiter ([fork PR #4](https://github.com/strausmann/go2rtc/pull/4)) | Bounds NACK retransmission requests per WebRTC sender |
-| Keyframe on viewer request (slim version of upstream PR candidate) | Gets a fresh keyframe from a UniFi Protect camera when a WebRTC viewer sends PLI/FIR |
+| TLS handshake deadline and Content-Length checks in `pkg/tcp` | A silent TLS peer cannot block the keyframe helper session on `rtsps` sources |
 | Short-lived TURN credentials for browsers | `GET /api/webrtc/ice` hands browsers ICE servers with time-limited TURN credentials, so a coturn shared secret never reaches the page |
 
 ### TURN credentials for the browser
@@ -88,10 +94,10 @@ streams:
   doorbell: rtspx://protect-host:7441/camera-token#keyframe=resetup
 ```
 
-The existing RTCP read loop of the WebRTC senders (upstream PR 2486) reports PLI/FIR of video
-senders to the stream, which asks its RTSP producers for a keyframe. A producer with the option
+Carried from upstream PR 2685. The RTCP read loop of the WebRTC senders (upstream PR 2486) passes PLI/FIR
+along the track chain in `pkg/core` to the source of that track. An RTSP video track with the option
 opens a short helper session (DESCRIBE, SETUP video, TEARDOWN, no PLAY) on its own connection: at
-most one at a time and one per second, bounded to 3 s, failures only at trace level. WebSocket
+most one at a time and one per second, every request with the usual timeout, failures only at trace level. WebSocket
 transports are not supported. A viewer that keeps sending PLI raises the keyframe rate of the shared
 encoder to at most one per second. **Rollback:** remove `#keyframe=resetup`.
 

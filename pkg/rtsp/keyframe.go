@@ -16,18 +16,11 @@ const (
 	keyframeInterval = time.Second
 )
 
-// keyframeTimeout limits the whole helper session after dial, it is a variable for tests
-var keyframeTimeout = 3 * time.Second
-
 // RequestKeyframe asks the camera for a keyframe with a short helper session.
-// Disabled by default, enabled with the option `#keyframe=resetup`. It never
-// blocks and never touches the main session. Helper sessions don't overlap,
-// and start at least keyframeInterval apart.
+// GetTrack sets it as the keyframe handler of video tracks with the option
+// `#keyframe=resetup`. It never blocks and never touches the main session.
+// Helper sessions don't overlap, and start at least keyframeInterval apart.
 func (c *Conn) RequestKeyframe() {
-	if c.Keyframe != KeyframeResetup {
-		return
-	}
-
 	now := time.Now().UnixNano()
 	next := c.keyframeNext.Load()
 	if now < next || !c.keyframeNext.CompareAndSwap(next, math.MaxInt64) {
@@ -44,7 +37,8 @@ func (c *Conn) RequestKeyframe() {
 }
 
 // keyframeSession: DESCRIBE, SETUP video, TEARDOWN. There is no PLAY, the
-// camera sends the keyframe on SETUP. Only a TCP session is used.
+// camera sends the keyframe on SETUP. Only a TCP session is used, every
+// request has the usual timeout.
 func (c *Conn) keyframeSession() error {
 	switch c.Transport {
 	case "", "tcp", "udp":
@@ -52,19 +46,20 @@ func (c *Conn) keyframeSession() error {
 		return nil // ex. RTSP over WebSocket has no dial timeout
 	}
 
-	h := NewClient(c.keyframeURI.Load().(string))
+	// c.uri changes on a redirect of the main session, after the tracks exist
+	// only under stateMu (GetTrack, Start)
+	c.stateMu.Lock()
+	uri := c.uri
+	c.stateMu.Unlock()
+
+	h := NewClient(uri)
 	h.UserAgent = c.UserAgent
 	h.Timeout = c.Timeout
-	h.noRedirect = true // a redirect would dial a connection the session timer doesn't know
 
 	if err := h.Dial(); err != nil {
 		return err
 	}
 	defer h.Close() // sends TEARDOWN after DESCRIBE, then closes the connection
-
-	// the deadlines of Do/WriteRequest are per request, so bound the whole session
-	timer := time.AfterFunc(keyframeTimeout, func() { _ = h.conn.Close() })
-	defer timer.Stop()
 
 	if err := h.Describe(); err != nil {
 		return err

@@ -21,15 +21,13 @@ import (
 var Timeout = time.Second * 5
 
 func NewClient(uri string) *Conn {
-	c := &Conn{
+	return &Conn{
 		Connection: core.Connection{
 			ID:         core.NewID(),
 			FormatName: "rtsp",
 		},
 		uri: uri,
 	}
-	c.keyframeURI.Store(uri)
-	return c
 }
 
 func (c *Conn) Dial() (err error) {
@@ -100,10 +98,6 @@ func (c *Conn) Do(req *tcp.Request) (*tcp.Response, error) {
 		return res, nil
 
 	case http.StatusMovedPermanently, http.StatusFound:
-		if c.noRedirect {
-			return nil, errors.New("redirect not allowed")
-		}
-
 		rawURL := res.Header.Get("Location")
 
 		var u *url.URL
@@ -116,7 +110,6 @@ func (c *Conn) Do(req *tcp.Request) (*tcp.Response, error) {
 		}
 
 		c.uri = u.String() // so auth will be saved on reconnect
-		c.keyframeURI.Store(c.uri)
 
 		_ = c.conn.Close()
 
