@@ -219,3 +219,24 @@ func TestRequestKeyframeRedirect(t *testing.T) {
 	}
 	require.Empty(t, target.sessions())
 }
+
+// the main session followed a redirect, the helper must use the final location
+func TestRequestKeyframeAfterRedirect(t *testing.T) {
+	setTimeout(t)
+
+	target := newKeyframeCamera(t)
+	camera := newKeyframeCamera(t)
+	camera.redirect = target.uri
+
+	conn := NewClient(camera.uri)
+	require.Nil(t, conn.Dial())
+	require.Nil(t, conn.Describe()) // redirected to target
+	t.Cleanup(func() { _ = conn.conn.Close() })
+
+	conn.Keyframe = KeyframeResetup
+	conn.RequestKeyframe()
+
+	target.waitClosed(t)
+	require.Equal(t, []string{MethodDescribe, MethodDescribe, MethodSetup, MethodTeardown}, target.sessions())
+	require.Equal(t, []string{MethodDescribe}, camera.sessions())
+}

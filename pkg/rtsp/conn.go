@@ -55,8 +55,8 @@ type Conn struct {
 	udpAddr []*net.UDPAddr
 
 	keyframeNext atomic.Int64 // earliest time of the next RequestKeyframe
-	keyframeURI  string
-	noRedirect   bool // Do fails on 301/302 instead of dialing the new location
+	keyframeURI  atomic.Value // string, c.uri after redirects, safe to read from the helper
+	noRedirect   bool         // Do fails on 301/302 instead of dialing the new location
 }
 
 const (

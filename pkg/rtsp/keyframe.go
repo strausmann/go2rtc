@@ -52,7 +52,7 @@ func (c *Conn) keyframeSession() error {
 		return nil // ex. RTSP over WebSocket has no dial timeout
 	}
 
-	h := NewClient(c.keyframeURI)
+	h := NewClient(c.keyframeURI.Load().(string))
 	h.UserAgent = c.UserAgent
 	h.Timeout = c.Timeout
 	h.noRedirect = true // a redirect would dial a connection the session timer doesn't know
