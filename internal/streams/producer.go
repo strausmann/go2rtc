@@ -131,20 +131,6 @@ func (p *Producer) AddTrack(media *core.Media, codec *core.Codec, track *core.Re
 	return nil
 }
 
-// requestKeyframe asks the source for a keyframe, if it supports that.
-func (p *Producer) requestKeyframe() {
-	// Dial holds the lock while connecting, the caller must not wait for it
-	if !p.mu.TryLock() {
-		return
-	}
-	conn := p.conn
-	p.mu.Unlock()
-
-	if k, ok := conn.(interface{ RequestKeyframe() }); ok {
-		k.RequestKeyframe()
-	}
-}
-
 func (p *Producer) MarshalJSON() ([]byte, error) {
 	if conn := p.conn; conn != nil {
 		return json.Marshal(conn)

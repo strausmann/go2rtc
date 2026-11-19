@@ -112,11 +112,6 @@ func (s *Stream) addConsumer(cons core.Consumer, consMedias []*core.Media, isNew
 	}
 
 	if isNew {
-		// ex. WebRTC viewer sends PLI/FIR
-		if k, ok := cons.(interface{ OnKeyframeRequest(func()) }); ok {
-			k.OnKeyframeRequest(s.RequestKeyframe)
-		}
-
 		s.mu.Lock()
 		s.consumers = append(s.consumers, cons)
 		s.mu.Unlock()

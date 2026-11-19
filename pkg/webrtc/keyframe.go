@@ -9,13 +9,6 @@ import (
 	"github.com/pion/rtcp"
 )
 
-// OnKeyframeRequest sets the handler for PLI/FIR from the remote side.
-// The handler is called from the RTCP read loop and must not block.
-// It can be set or replaced at any time.
-func (c *Conn) OnKeyframeRequest(handler func()) {
-	c.keyframe.Store(&handler)
-}
-
 // maxRTCPReadErrors ends the RTCP read loop after this many failed reads in a row.
 const maxRTCPReadErrors = 64
 
@@ -25,11 +18,11 @@ func rtcpReadDone(err error) bool {
 }
 
 // readRTCP reads RTCP from one sender until it is closed. Reading keeps Pion's
-// interceptors (ex. the NACK responder) running, so it runs also without a
-// keyframe handler. PLI/FIR go to the handler, if one is set.
+// interceptors (ex. the NACK responder) running. PLI/FIR ask the source of
+// the track for a keyframe, if there is a track.
 // The interceptors return a broken or too large packet as a read error: skip
 // it, end only when the reader is closed or too many reads in a row failed.
-func (c *Conn) readRTCP(read func([]byte) (int, interceptor.Attributes, error)) {
+func readRTCP(read func([]byte) (int, interceptor.Attributes, error), track *Track) {
 	b := make([]byte, 1500)
 	for errs := 0; ; {
 		n, _, err := read(b)
@@ -41,15 +34,14 @@ func (c *Conn) readRTCP(read func([]byte) (int, interceptor.Attributes, error)) 
 		}
 		errs = 0
 
-		handler := c.keyframe.Load()
-		if handler == nil {
+		if track == nil {
 			continue
 		}
 		pkts, _ := rtcp.Unmarshal(b[:n])
 		for _, pkt := range pkts {
 			switch pkt.(type) {
 			case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-				(*handler)()
+				track.requestKeyframe()
 			}
 		}
 	}

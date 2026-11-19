@@ -94,10 +94,10 @@ streams:
   doorbell: rtspx://protect-host:7441/camera-token#keyframe=resetup
 ```
 
-Carried from upstream PR 2685. The RTCP read loop of the WebRTC senders (upstream PR 2486) reports PLI/FIR of video
-senders to the stream, which asks its RTSP producers for a keyframe. A producer with the option
+Carried from upstream PR 2685. The RTCP read loop of the WebRTC senders (upstream PR 2486) passes PLI/FIR
+along the track chain in `pkg/core` to the source of that track. An RTSP video track with the option
 opens a short helper session (DESCRIBE, SETUP video, TEARDOWN, no PLAY) on its own connection: at
-most one at a time and one per second, bounded to 3 s, failures only at trace level. WebSocket
+most one at a time and one per second, every request with the usual timeout, failures only at trace level. WebSocket
 transports are not supported. A viewer that keeps sending PLI raises the keyframe rate of the shared
 encoder to at most one per second. **Rollback:** remove `#keyframe=resetup`.
 

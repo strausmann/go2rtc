@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -25,7 +24,6 @@ type Conn struct {
 	offer    string
 	closed   core.Waiter
 	rtcpOnce sync.Once
-	keyframe atomic.Pointer[func()]
 }
 
 func NewConn(pc *webrtc.PeerConnection) *Conn {
@@ -140,11 +138,12 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
 		case webrtc.PeerConnectionStateConnected:
 			// Pion's NACK responder runs while RTCP is read. Without this,
 			// receivers request missing RTP packets but never receive repairs.
-			// The same reader passes PLI/FIR to the keyframe handler.
 			// Start only once; an ICE transition must not add competing readers.
+			// The same reader passes PLI/FIR to the source of the track.
 			c.rtcpOnce.Do(func() {
 				for _, sender := range pc.GetSenders() {
-					go c.readRTCP(sender.Read)
+					track, _ := sender.Track().(*Track)
+					go readRTCP(sender.Read, track)
 				}
 			})
 			for _, sender := range c.Senders {

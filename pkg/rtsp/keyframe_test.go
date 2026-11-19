@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,7 +112,6 @@ func TestRequestKeyframe(t *testing.T) {
 	camera := newKeyframeCamera(t)
 
 	conn := NewClient(camera.uri)
-	conn.Keyframe = KeyframeResetup
 
 	// concurrent requests start only one helper session
 	var wg sync.WaitGroup
@@ -141,15 +141,50 @@ func TestRequestKeyframe(t *testing.T) {
 	require.Len(t, camera.sessions(), 6)
 }
 
-func TestRequestKeyframeDisabled(t *testing.T) {
+// GetTrack sets the keyframe handler only for video and only with the option
+func TestGetTrackKeyframe(t *testing.T) {
 	setTimeout(t)
-	camera := newKeyframeCamera(t)
 
-	conn := NewClient(camera.uri) // option is not set
-	conn.RequestKeyframe()
+	for _, tc := range []struct {
+		keyframe string
+		kind     string
+		helper   bool
+	}{
+		{KeyframeResetup, core.KindVideo, true},
+		{KeyframeResetup, core.KindAudio, false},
+		{"", core.KindVideo, false},
+	} {
+		camera := newKeyframeCamera(t)
 
-	time.Sleep(100 * time.Millisecond)
-	require.Empty(t, camera.sessions())
+		conn := NewClient(camera.uri)
+		conn.Keyframe = tc.keyframe
+		require.Nil(t, conn.Dial())
+		require.Nil(t, conn.Describe())
+		t.Cleanup(func() { _ = conn.conn.Close() })
+
+		var track *core.Receiver
+		for _, media := range conn.Medias {
+			if media.Kind == tc.kind {
+				var err error
+				track, err = conn.GetTrack(media, media.Codecs[0])
+				require.Nil(t, err)
+			}
+		}
+		require.NotNil(t, track)
+		main := len(camera.sessions()) // DESCRIBE, SETUP of the main session
+
+		sender := core.NewSender(nil, track.Codec)
+		sender.Bind(track)
+		sender.RequestKeyframe()
+
+		if tc.helper {
+			camera.waitClosed(t)
+			require.Equal(t, []string{MethodDescribe, MethodSetup, MethodTeardown}, camera.sessions()[main:])
+		} else {
+			time.Sleep(100 * time.Millisecond)
+			require.Len(t, camera.sessions(), main, "%s %s", tc.keyframe, tc.kind)
+		}
+	}
 }
 
 func TestRequestKeyframeError(t *testing.T) {
@@ -160,7 +195,6 @@ func TestRequestKeyframeError(t *testing.T) {
 	require.Nil(t, ln.Close()) // connection refused
 
 	conn := NewClient(uri)
-	conn.Keyframe = KeyframeResetup
 
 	msg := make(chan any, 1)
 	conn.Listen(func(m any) { msg <- m })
@@ -175,52 +209,24 @@ func TestRequestKeyframeError(t *testing.T) {
 	}
 }
 
-// a camera that never answers can't block the helper session
+// a camera that never answers can't block the helper session, every request
+// has the usual timeout
 func TestRequestKeyframeTimeout(t *testing.T) {
-	setTimeout(t)
-
-	old := keyframeTimeout
-	keyframeTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { keyframeTimeout = old })
+	old := Timeout
+	Timeout = 100 * time.Millisecond
+	t.Cleanup(func() { Timeout = old })
 
 	ln, err := net.Listen("tcp", "localhost:0")
 	require.Nil(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 
 	conn := NewClient("rtsp://" + ln.Addr().String() + "/stream")
-	conn.Keyframe = KeyframeResetup
-
 	conn.RequestKeyframe()
 
 	require.Eventually(t, func() bool { return conn.keyframeNext.Load() != math.MaxInt64 }, 2*time.Second, 5*time.Millisecond)
 }
 
-// a redirect would dial a connection that the session timeout doesn't cover
-func TestRequestKeyframeRedirect(t *testing.T) {
-	setTimeout(t)
-
-	target := newKeyframeCamera(t)
-	camera := newKeyframeCamera(t)
-	camera.redirect = target.uri
-
-	conn := NewClient(camera.uri)
-	conn.Keyframe = KeyframeResetup
-
-	msg := make(chan any, 1)
-	conn.Listen(func(m any) { msg <- m })
-
-	conn.RequestKeyframe()
-
-	select {
-	case m := <-msg:
-		require.Contains(t, m, "RTSP keyframe")
-	case <-time.After(5 * time.Second):
-		t.Fatal("no error")
-	}
-	require.Empty(t, target.sessions())
-}
-
-// the main session followed a redirect, the helper must use the final location
+// the main session followed a redirect, the helper uses the final location
 func TestRequestKeyframeAfterRedirect(t *testing.T) {
 	setTimeout(t)
 
@@ -233,7 +239,6 @@ func TestRequestKeyframeAfterRedirect(t *testing.T) {
 	require.Nil(t, conn.Describe()) // redirected to target
 	t.Cleanup(func() { _ = conn.conn.Close() })
 
-	conn.Keyframe = KeyframeResetup
 	conn.RequestKeyframe()
 
 	target.waitClosed(t)
