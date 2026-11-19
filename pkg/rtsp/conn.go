@@ -56,6 +56,7 @@ type Conn struct {
 
 	keyframeNext atomic.Int64 // earliest time of the next RequestKeyframe
 	keyframeURI  string
+	noRedirect   bool // Do fails on 301/302 instead of dialing the new location
 }
 
 const (

@@ -16,7 +16,8 @@ import (
 
 // keyframeCamera records the methods of all sessions
 type keyframeCamera struct {
-	uri string
+	uri      string
+	redirect string // answer DESCRIBE with a redirect to this URI
 
 	mu      sync.Mutex
 	methods []string
@@ -65,6 +66,10 @@ func (c *keyframeCamera) serve(conn net.Conn) {
 		res := "RTSP/1.0 200 OK\r\nCseq: " + header.Get("Cseq") + "\r\n"
 		switch method {
 		case MethodDescribe:
+			if c.redirect != "" {
+				res = "RTSP/1.0 302 Found\r\nCseq: " + header.Get("Cseq") + "\r\nLocation: " + c.redirect + "\r\n\r\n"
+				break
+			}
 			sdp := "v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\n" +
 				"m=audio 0 RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\n" +
 				"m=video 0 RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n"
@@ -188,4 +193,29 @@ func TestRequestKeyframeTimeout(t *testing.T) {
 	conn.RequestKeyframe()
 
 	require.Eventually(t, func() bool { return conn.keyframeNext.Load() != math.MaxInt64 }, 2*time.Second, 5*time.Millisecond)
+}
+
+// a redirect would dial a connection that the session timeout doesn't cover
+func TestRequestKeyframeRedirect(t *testing.T) {
+	setTimeout(t)
+
+	target := newKeyframeCamera(t)
+	camera := newKeyframeCamera(t)
+	camera.redirect = target.uri
+
+	conn := NewClient(camera.uri)
+	conn.Keyframe = KeyframeResetup
+
+	msg := make(chan any, 1)
+	conn.Listen(func(m any) { msg <- m })
+
+	conn.RequestKeyframe()
+
+	select {
+	case m := <-msg:
+		require.Contains(t, m, "RTSP keyframe")
+	case <-time.After(5 * time.Second):
+		t.Fatal("no error")
+	}
+	require.Empty(t, target.sessions())
 }

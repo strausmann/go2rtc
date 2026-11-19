@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/stretchr/testify/require"
@@ -71,6 +72,30 @@ func (c *keyframeConsumer) GetMedias() []*core.Media {
 }
 func (c *keyframeConsumer) AddTrack(*core.Media, *core.Codec, *core.Receiver) error { return nil }
 func (c *keyframeConsumer) Stop() error                                             { return nil }
+
+// the request comes from an RTCP read loop and must not wait for the stream lock
+func TestRequestKeyframeLocked(t *testing.T) {
+	prod := &keyframeProducer{stop: make(chan struct{})}
+	stream := new(Stream)
+	stream.producers = []*Producer{{conn: prod, state: stateExternal, url: "external"}}
+
+	stream.mu.Lock() // ex. stopProducers waits for network I/O
+	done := make(chan struct{})
+	go func() {
+		stream.RequestKeyframe()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("RequestKeyframe waits for the stream lock")
+	}
+	stream.mu.Unlock()
+	<-done
+
+	require.Equal(t, int32(0), prod.requests.Load())
+}
 
 // a keyframe request from the consumer (ex. WebRTC PLI) reaches the producer
 func TestRequestKeyframe(t *testing.T) {

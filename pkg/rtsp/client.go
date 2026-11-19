@@ -99,6 +99,10 @@ func (c *Conn) Do(req *tcp.Request) (*tcp.Response, error) {
 		return res, nil
 
 	case http.StatusMovedPermanently, http.StatusFound:
+		if c.noRedirect {
+			return nil, errors.New("redirect not allowed")
+		}
+
 		rawURL := res.Header.Get("Location")
 
 		var u *url.URL

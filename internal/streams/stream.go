@@ -79,7 +79,11 @@ func (s *Stream) RemoveConsumer(cons core.Consumer) {
 
 // RequestKeyframe asks the sources for a keyframe, ex. on WebRTC PLI/FIR.
 func (s *Stream) RequestKeyframe() {
-	s.mu.Lock()
+	// stopProducers holds the lock during network I/O, but the caller is an
+	// RTCP read loop, so drop the request instead of waiting
+	if !s.mu.TryLock() {
+		return
+	}
 	producers := slices.Clone(s.producers)
 	s.mu.Unlock()
 

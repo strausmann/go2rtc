@@ -55,6 +55,7 @@ func (c *Conn) keyframeSession() error {
 	h := NewClient(c.keyframeURI)
 	h.UserAgent = c.UserAgent
 	h.Timeout = c.Timeout
+	h.noRedirect = true // a redirect would dial a connection the session timer doesn't know
 
 	if err := h.Dial(); err != nil {
 		return err
