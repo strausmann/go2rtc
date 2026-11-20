@@ -175,6 +175,13 @@ Two upstream problems are handled explicitly, not hidden:
 - `pkg/core/core_test.go` does not build on upstream master (`StripUserinfo` no longer exists). The
   package runs with all other test files, including `node_test.go` for the keyframe chain.
 
+Both `doorbridge-test.yml` and `upstream-check.yml` test with Go 1.27, the toolchain the image is
+built with (`GO_VERSION` in `docker/Dockerfile`), not the `go.mod` minimum 1.26.0. With Go 1.26.0,
+`urlParse` in `pkg/rtsp/helpers.go` (unchanged from upstream) recurses forever on a URL such as
+`rtsp://::ffff:192.168.1.123/...`: `url.Parse` keeps reporting an invalid port "after host", and every
+retry inserts another `:`. `TestURLParse` then never returns. Go 1.27 parses the retried URL, so the
+image is not affected; a binary built with Go 1.26 is.
+
 ## Exit condition
 
 This fork is temporary. Once the talkback source from PR #2340 (or an equivalent) is part of an
