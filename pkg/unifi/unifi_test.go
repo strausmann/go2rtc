@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,11 @@ import (
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMain(m *testing.M) {
+	retryDelay = 0 // tests check failures without the delay
+	os.Exit(m.Run())
+}
 
 const cameraPath = "/proxy/protect/integration/v1/cameras/camera1"
 
@@ -218,7 +224,7 @@ func TestTalkback(t *testing.T) {
 	require.Equal(t, &Session{URL: "rtp://127.0.0.1:6500", Codec: "opus", SamplingRate: 24000}, bc.session)
 	require.Equal(t, core.CodecPCMA, bc.codec.Name)
 	talk(t, bc, track, 1)
-	require.Equal(t, "***", creds.SecretString(bc.session.URL))
+	require.Equal(t, "rtp://127.0.0.1:6500", creds.SecretString(bc.session.URL), "session URL is no secret")
 
 	writeRTP(track) // second packet does not open a second session
 
@@ -346,4 +352,58 @@ func TestTalkbackMicrophoneCodecChanged(t *testing.T) {
 	media := client.Medias[0]
 	err := client.AddTrack(media, media.Codecs[1], core.NewReceiver(media, media.Codecs[1]))
 	require.EqualError(t, err, "unifi: microphone codec changed: PCMU")
+}
+
+// A malicious session URL must not become a mask pattern for logs and API output.
+func TestTalkbackSessionURLIsNoSecret(t *testing.T) {
+	p := newProtect(t)
+	p.session = Session{URL: `"`, Codec: "opus", SamplingRate: 24000}
+	client, bc, track, done := dial(t, p)
+
+	writeRTP(track)
+	recv(t, bc.started)
+	require.Equal(t, `{"a":"x"}`, creds.SecretString(`{"a":"x"}`))
+
+	require.NoError(t, client.Stop())
+	require.NoError(t, recv(t, done))
+}
+
+// streams reconnects at once after Start, a failing talkback must not hammer Protect
+func TestTalkbackRetryDelay(t *testing.T) {
+	defer func(d time.Duration) { retryDelay = d }(retryDelay)
+	retryDelay = 200 * time.Millisecond
+
+	p := newProtect(t)
+	p.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			p.posts.Add(1)
+			http.Error(w, "", http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write([]byte(`{"featureFlags":{"hasSpeaker":true}}`))
+	})
+
+	// like streams.Producer.reconnect with a microphone that keeps sending
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		client, _, track, done := dial(t, p)
+		writeRTP(track)
+		require.Error(t, recv(t, done))
+		_ = client.Stop()
+	}
+
+	require.LessOrEqual(t, p.posts.Load(), int32(6), "at most one POST per retryDelay")
+}
+
+func TestTalkbackRetryDelayStop(t *testing.T) {
+	defer func(d time.Duration) { retryDelay = d }(retryDelay)
+	retryDelay = time.Hour
+
+	p := newProtect(t) // empty session -> talkback fails
+	client, _, track, done := dial(t, p)
+	writeRTP(track)
+	time.Sleep(50 * time.Millisecond)
+
+	require.NoError(t, client.Stop())
+	require.EqualError(t, recv(t, done), "unifi: talkback url required", "Stop ends the wait")
 }
