@@ -11,6 +11,7 @@ cameras and doorbells) before that change is available in an upstream release.
 |---|---|
 | [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
 | [AlexxIT/go2rtc#2685](https://github.com/AlexxIT/go2rtc/pull/2685) | Request a source keyframe when a WebRTC viewer sends PLI/FIR (`#keyframe=resetup`), reworked version on top of upstream `bdf7eee` |
+| pending, not yet opened | `GetCompleteAnswer`: buffered channel and non-blocking send, so a renegotiation on the same connection no longer hangs (since pion/webrtc v4.2.25 the end-of-gathering candidate fires again; `TestRenegotiationBackchannel`) |
 
 Merged upstream and no longer carried as fork changes:
 
@@ -18,6 +19,8 @@ Merged upstream and no longer carried as fork changes:
 |---|---|
 | [AlexxIT/go2rtc#2486](https://github.com/AlexxIT/go2rtc/pull/2486) | Read RTCP feedback from WebRTC senders so pion's NACK responder can retransmit lost packets |
 | [AlexxIT/go2rtc#2684](https://github.com/AlexxIT/go2rtc/pull/2684) | NACK retransmission limiter (formerly fork PR #4) |
+| [AlexxIT/go2rtc#2700](https://github.com/AlexxIT/go2rtc/pull/2700) | Bound the TLS handshake by the dial timeout in `pkg/tcp` |
+| [AlexxIT/go2rtc#2702](https://github.com/AlexxIT/go2rtc/pull/2702) | Limit the number of RTSP redirects |
 
 ## Fork additions
 
@@ -25,8 +28,9 @@ Changes that exist only in this fork.
 
 | Addition | Purpose |
 |---|---|
-| TLS handshake deadline and Content-Length checks in `pkg/tcp` | A silent TLS peer cannot block the keyframe helper session on `rtsps` sources |
+| Content-Length checks in `pkg/tcp` | A negative or huge `Content-Length` in an RTSP message is rejected instead of panicking or allocating gigabytes (the TLS handshake deadline is upstream since PR 2700) |
 | Short-lived TURN credentials for browsers | `GET /api/webrtc/ice` hands browsers ICE servers with time-limited TURN credentials, so a coturn shared secret never reaches the page |
+| Test fix in `pkg/rtsp/client_test.go` | The `TestMissedControl` server goroutine returns on read errors; otherwise it fails after the test ended and panics the package run (also on plain upstream with `-count=5`) |
 
 ### TURN credentials for the browser
 

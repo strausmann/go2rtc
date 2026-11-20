@@ -43,9 +43,7 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      # TestRenegotiationBackchannel hangs until the timeout on plain upstream too
-      # (checked on 1a21ad3, before upstream PR 2486), so it is skipped here.
       - name: go test
         env:
           GOARCH: ${{ matrix.goarch }}
-        run: go test ${{ matrix.flags }} -skip TestRenegotiationBackchannel ./pkg/webrtc/... ./internal/webrtc/...
+        run: go test ${{ matrix.flags }} ./pkg/webrtc/... ./internal/webrtc/...

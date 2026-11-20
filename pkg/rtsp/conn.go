@@ -45,6 +45,7 @@ type Conn struct {
 	playOK      bool
 	playErr     error
 	reader      *bufio.Reader
+	redirects   int
 	sequence    int
 	session     string
 	uri         string

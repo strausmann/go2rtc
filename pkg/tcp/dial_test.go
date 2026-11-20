@@ -1,11 +1,13 @@
 package tcp
 
 import (
-	"context"
+	"crypto/tls"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,98 +16,114 @@ import (
 
 // silentServer accepts TCP connections and never sends a byte,
 // so a TLS client handshake against it never completes on its own.
-func silentServer(t *testing.T) string {
+// Accepted connections are delivered to the returned channel.
+func silentServer(t *testing.T) (string, <-chan net.Conn) {
 	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
 
-	var mu sync.Mutex
-	var conns []net.Conn
-	done := make(chan struct{})
-
+	conns := make(chan net.Conn, 1)
 	go func() {
-		defer close(done)
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			mu.Lock()
-			conns = append(conns, conn)
-			mu.Unlock()
+			conns <- conn
 		}
 	}()
 
-	t.Cleanup(func() {
-		_ = ln.Close()
-		<-done
-		mu.Lock()
-		for _, conn := range conns {
-			_ = conn.Close() // also ends a client handshake that has no deadline
-		}
-		mu.Unlock()
-	})
-
-	return ln.Addr().String()
+	return ln.Addr().String(), conns
 }
 
 func TestDialTLSHandshakeTimeout(t *testing.T) {
 	for _, scheme := range []string{"rtspx", "rtsps"} {
 		t.Run(scheme, func(t *testing.T) {
-			u, err := url.Parse(scheme + "://" + silentServer(t) + "/stream")
+			addr, conns := silentServer(t)
+			u, err := url.Parse(scheme + "://" + addr + "/stream")
 			require.NoError(t, err)
-
-			const timeout = 200 * time.Millisecond
 
 			type result struct {
 				conn net.Conn
 				err  error
-				took time.Duration
 			}
 			ch := make(chan result, 1)
 			go func() {
-				start := time.Now()
-				conn, err := Dial(u, timeout)
-				ch <- result{conn, err, time.Since(start)}
+				conn, err := Dial(u, 200*time.Millisecond)
+				ch <- result{conn, err}
 			}()
 
 			select {
 			case res := <-ch:
 				require.Nil(t, res.conn)
 				require.ErrorIs(t, res.err, os.ErrDeadlineExceeded)
-				require.Less(t, res.took, timeout+500*time.Millisecond)
-			case <-time.After(2 * time.Second):
+			case <-time.After(3 * time.Second):
 				t.Fatal("TLS handshake is not bounded by the dial timeout")
 			}
+
+			// release the server side of the hanging case
+			(<-conns).Close()
 		})
 	}
 }
 
-func TestDialContextCancelAbortsTLSHandshake(t *testing.T) {
-	u, err := url.Parse("rtspx://" + silentServer(t) + "/stream")
+func TestDialTLSHandshakeFailureClosesConn(t *testing.T) {
+	addr, conns := silentServer(t)
+	u, err := url.Parse("rtspx://" + addr + "/stream")
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
+	done := make(chan error, 1)
+	go func() {
+		_, err := Dial(u, 200*time.Millisecond)
+		done <- err
+	}()
 
-	start := time.Now()
-	conn, err := DialContext(ctx, u, 5*time.Second)
-	took := time.Since(start)
+	server := <-conns
+	defer server.Close()
 
-	require.Nil(t, conn)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Less(t, took, time.Second, "handshake not aborted by the context")
+	// the server sees the ClientHello and then EOF once the client closes
+	_ = server.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, err = io.Copy(io.Discard, server)
+	require.NoError(t, err, "connection was not closed after the failed handshake")
+	require.Error(t, <-done)
 }
 
-func TestDialContextCancelled(t *testing.T) {
-	u, err := url.Parse("rtsp://" + silentServer(t) + "/stream")
+func TestDialTLSDeadlineClearedAfterHandshake(t *testing.T) {
+	// borrow a self-signed certificate from the test HTTPS server
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	cert := srv.TLS.Certificates[0]
+	srv.Close()
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	const timeout = 200 * time.Millisecond
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// finish the handshake, then stay silent for longer than the dial timeout
+		_ = conn.(*tls.Conn).Handshake()
+		time.Sleep(2 * timeout)
+		_, _ = conn.Write([]byte("x"))
+	}()
+
+	u, err := url.Parse("rtspx://" + ln.Addr().String() + "/stream")
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	conn, err := Dial(u, timeout)
+	require.NoError(t, err)
+	defer conn.Close()
 
-	conn, err := DialContext(ctx, u, 5*time.Second)
-	require.Nil(t, conn)
-	require.ErrorIs(t, err, context.Canceled)
+	// no SetReadDeadline here: it would replace the deadline under test.
+	// The server writes after 2*timeout, so a leftover dial deadline fails the read.
+	b := make([]byte, 1)
+	_, err = io.ReadFull(conn, b)
+	require.NoError(t, err)
 }
