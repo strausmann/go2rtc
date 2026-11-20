@@ -36,8 +36,24 @@ func TestString(t *testing.T) {
 	AddSecret("pa$$word")
 
 	s := SecretString("rtsp://admin:pa$$word@192.168.1.123/stream1")
-	// since upstream de157eb the whole userinfo is replaced by a single ***
 	require.Equal(t, "rtsp://***@192.168.1.123/stream1", s)
+
+	s = SecretString("http://192.168.1.123/cgi?user=admin&pwd=pa$$word")
+	require.Equal(t, "http://192.168.1.123/cgi?user=***&pwd=***", s)
+}
+
+func TestStripUserinfo(t *testing.T) {
+	s := `streams:
+  test:
+    - ffmpeg:rtsp://username:password@10.1.2.3:554/stream1
+    - ffmpeg:rtsp://10.1.2.3:554/stream1@#video=copy
+`
+	s = SecretString(s)
+	require.Equal(t, `streams:
+  test:
+    - ffmpeg:rtsp://***@10.1.2.3:554/stream1
+    - ffmpeg:rtsp://10.1.2.3:554/stream1@#video=copy
+`, s)
 }
 
 type recordWriter struct {
