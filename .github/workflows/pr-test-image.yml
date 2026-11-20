@@ -1,0 +1,271 @@
+name: PR test image
+
+# Builds a test image for ONE upstream pull request: AlexxIT/go2rtc <base> plus a
+# branch (or commit chain) of this fork. Nothing from the doorbridge branch goes in
+# (no TURN code, no other fork additions), unless the chosen ref carries it.
+# Started by hand only, never by a push, a pull request or a schedule.
+#
+# Two jobs on purpose, same idea as upstream-check.yml:
+#   - "prepare" fetches and merges source code. It runs git only, builds and executes
+#     nothing, and has read-only rights.
+#   - "build" holds the packages:write token. It receives the prepared source tree as
+#     data (artifact) and builds it; it never runs git on foreign refs.
+#
+# Tags: ghcr.io/<owner>/go2rtc:pr<pr>-<sha7 of ref> (immutable) and
+#       ghcr.io/<owner>/go2rtc:pr<pr> (moving, latest build of this PR).
+# Not an official release. Never tagged latest or doorbridge-*.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or commit of this fork to test (required)"
+        required: true
+        type: string
+      pr:
+        description: "Upstream AlexxIT/go2rtc pull request number (digits only)"
+        required: true
+        type: string
+      base:
+        description: "Upstream branch to build on"
+        required: false
+        default: master
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pr-test-image-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare source
+    runs-on: ubuntu-24.04
+    # The workflow file itself must come from the vetted doorbridge branch.
+    if: github.ref == 'refs/heads/doorbridge'
+    permissions:
+      contents: read
+    outputs:
+      pr: ${{ steps.src.outputs.pr }}
+      sha: ${{ steps.src.outputs.sha }}
+      sha7: ${{ steps.src.outputs.sha7 }}
+      base_sha: ${{ steps.src.outputs.base_sha }}
+      mode: ${{ steps.src.outputs.mode }}
+    steps:
+      # No checkout of this repository: nothing from it is needed or executed.
+      - name: Validate inputs, fetch, merge
+        id: src
+        env:
+          IN_PR: ${{ inputs.pr }}
+          IN_REF: ${{ inputs.ref }}
+          IN_BASE: ${{ inputs.base }}
+          FORK_URL: ${{ github.server_url }}/${{ github.repository }}
+          UPSTREAM_URL: https://github.com/AlexxIT/go2rtc.git
+          OUT_DIR: ${{ runner.temp }}/out
+          WORK_DIR: ${{ runner.temp }}/work
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+
+          # Inputs are data. They are validated here and only ever used as quoted
+          # shell variables, never interpolated into this script.
+          [[ "$IN_PR" =~ ^[0-9]{1,7}$ ]] || fail "pr must be digits only"
+          name_re='^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$'
+          [[ "$IN_REF" =~ $name_re ]] || fail "ref must be a branch name or commit SHA (letters, digits, . _ / -)"
+          [[ "$IN_BASE" =~ $name_re ]] || fail "base must be a branch name (letters, digits, . _ / -)"
+          for v in "$IN_REF" "$IN_BASE"; do
+            case "$v" in *..*|*//*|*/|*.lock) fail "invalid name: $v" ;; esac
+          done
+
+          mkdir -p "$OUT_DIR" "$WORK_DIR"
+          cd "$WORK_DIR"
+          git init -q .
+          git config user.name "pr-test-image"
+          git config user.email "pr-test-image@users.noreply.github.com"
+          git config advice.detachedHead false
+
+          git fetch -q --no-tags "$UPSTREAM_URL" "+refs/heads/$IN_BASE:refs/remotes/upstream/base" \
+            || fail "base branch '$IN_BASE' not found in AlexxIT/go2rtc"
+          git fetch -q --no-tags "$FORK_URL" "+refs/heads/*:refs/remotes/fork/*"
+
+          base_sha="$(git rev-parse --verify "refs/remotes/upstream/base^{commit}")"
+
+          # ref: a branch of the fork, or a commit reachable from one. Never anything else.
+          if sha="$(git rev-parse --verify --quiet "refs/remotes/fork/$IN_REF^{commit}")"; then
+            :
+          elif [[ "$IN_REF" =~ ^[0-9a-f]{7,40}$ ]] && sha="$(git rev-parse --verify --quiet "$IN_REF^{commit}")"; then
+            git branch -r --contains "$sha" | grep -q '^ *fork/' || fail "commit $IN_REF is not part of any branch of this fork"
+          else
+            fail "ref '$IN_REF' is neither a branch of this fork nor a commit in it"
+          fi
+          sha7="$(git rev-parse --short=7 "$sha")"
+
+          # The personal image carries fork additions; a test image must not.
+          case "$IN_REF" in doorbridge|doorbridge-*) fail "ref must not be the doorbridge branch" ;; esac
+          if db="$(git rev-parse --verify --quiet "refs/remotes/fork/doorbridge^{commit}")" && [ "$db" = "$sha" ]; then
+            fail "ref points at the tip of doorbridge"
+          fi
+
+          count="$(git rev-list --count "$base_sha..$sha")"
+          [ "$count" -gt 0 ] || fail "ref has no commits beyond $IN_BASE ($base_sha); nothing to test"
+
+          git checkout -q --detach "$base_sha"
+          if git merge-base --is-ancestor "$base_sha" "$sha"; then
+            mode="fast-forward (ref builds directly on $IN_BASE)"
+            git checkout -q --detach "$sha"
+          else
+            mode="merge (ref is based on an older $IN_BASE, merged cleanly)"
+            if ! git merge --no-ff --no-edit -q "$sha" >/dev/null 2>"$OUT_DIR/merge.err"; then
+              echo "Conflicting files:"
+              git diff --name-only --diff-filter=U || true
+              git merge --abort || true
+              fail "ref does not merge cleanly into $IN_BASE ($base_sha); rebase it onto $IN_BASE first"
+            fi
+          fi
+
+          git log --oneline "$base_sha..$sha" > "$OUT_DIR/commits.txt"
+          tar --exclude=./.git -czf "$OUT_DIR/src.tar.gz" -C "$WORK_DIR" .
+
+          {
+            echo "pr=$IN_PR"
+            echo "sha=$sha"
+            echo "sha7=$sha7"
+            echo "base_sha=$base_sha"
+            echo "mode=$mode"
+          } >> "$GITHUB_OUTPUT"
+          echo "Source: $IN_BASE $base_sha + $sha ($count commits), $mode"
+
+      - name: Upload source tree
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: pr-test-source
+          path: |
+            ${{ runner.temp }}/out/src.tar.gz
+            ${{ runner.temp }}/out/commits.txt
+          retention-days: 3
+          if-no-files-found: error
+
+  build:
+    name: Build and push image
+    needs: prepare
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/doorbridge'
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/go2rtc
+      PR: ${{ needs.prepare.outputs.pr }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      SHA7: ${{ needs.prepare.outputs.sha7 }}
+      BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+      MODE: ${{ needs.prepare.outputs.mode }}
+    steps:
+      # No checkout here either. The source tree is data from the prepare job.
+      - name: Download source tree
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: pr-test-source
+          path: ${{ runner.temp }}/in
+
+      - name: Check values and unpack
+        id: prep
+        env:
+          IN_DIR: ${{ runner.temp }}/in
+          CTX_DIR: ${{ runner.temp }}/ctx
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          [[ "$PR" =~ ^[0-9]{1,7}$ ]] || fail "invalid pr"
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "invalid sha"
+          [[ "$SHA7" =~ ^[0-9a-f]{7}$ ]] || fail "invalid sha7"
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "invalid base sha"
+
+          mkdir -p "$CTX_DIR"
+          tar -xzf "$IN_DIR/src.tar.gz" -C "$CTX_DIR" --no-same-owner --no-same-permissions
+          [ -f "$CTX_DIR/docker/Dockerfile" ] || fail "docker/Dockerfile missing in source tree"
+
+          # Base image of the final stage, only if it resolves without surprises.
+          base_name=""
+          from="$(grep -E '^FROM ' "$CTX_DIR/docker/Dockerfile" | tail -n1 | awk '{ for (i=2;i<=NF;i++) if ($i !~ /^--/) { print $i; exit } }')"
+          for arg in PYTHON_VERSION GO_VERSION; do
+            val="$(sed -nE "s/^ARG ${arg}=\"?([^\"]*)\"?\$/\1/p" "$CTX_DIR/docker/Dockerfile" | head -n1)"
+            from="${from//\$\{$arg\}/$val}"
+          done
+          if [[ "$from" =~ ^[a-z0-9][a-z0-9._/:-]*$ ]]; then
+            case "$from" in */*) base_name="$from" ;; *) base_name="docker.io/library/$from" ;; esac
+          fi
+          echo "base_name=$base_name" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: ${{ runner.temp }}/ctx
+          file: ${{ runner.temp }}/ctx/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ${{ env.IMAGE }}:pr${{ env.PR }}-${{ env.SHA7 }}
+            ${{ env.IMAGE }}:pr${{ env.PR }}
+          labels: |
+            org.opencontainers.image.title=go2rtc (test build of AlexxIT/go2rtc#${{ env.PR }})
+            org.opencontainers.image.description=Test build of AlexxIT/go2rtc#${{ env.PR }}, not an official release
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/AlexxIT/go2rtc/pull/${{ env.PR }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+            org.opencontainers.image.version=pr${{ env.PR }}-${{ env.SHA7 }}
+            org.opencontainers.image.created=${{ steps.prep.outputs.created }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.vendor=projects@strausmann.ch
+            org.opencontainers.image.authors=projects@strausmann.ch
+            org.opencontainers.image.base.name=${{ steps.prep.outputs.base_name }}
+          # No build cache: a published image must not depend on a cache that other
+          # jobs on this repository can write (same rule as release.yml).
+          no-cache: true
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          COMMITS_FILE: ${{ runner.temp }}/in/commits.txt
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build produced no valid index digest"; exit 1; }
+          {
+            echo "## Test image for AlexxIT/go2rtc#$PR"
+            echo
+            echo "Test build, not an official release."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tag (immutable) | \`$IMAGE:pr$PR-$SHA7\` |"
+            echo "| Tag (moving) | \`$IMAGE:pr$PR\` |"
+            echo "| Index digest | \`$DIGEST\` |"
+            echo "| Pin | \`$IMAGE:pr$PR-$SHA7@$DIGEST\` |"
+            echo "| ref commit | [\`$SHA\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/$SHA) |"
+            echo "| Base commit (AlexxIT/go2rtc) | [\`$BASE_SHA\`](https://github.com/AlexxIT/go2rtc/commit/$BASE_SHA) |"
+            echo "| Combination | $MODE |"
+            echo "| Upstream PR | https://github.com/AlexxIT/go2rtc/pull/$PR |"
+            echo
+            echo "Commits on top of the base (\`git log --oneline base..ref\`):"
+            echo
+            echo '```'
+            head -c 20000 "$COMMITS_FILE" | tr -d '`'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
