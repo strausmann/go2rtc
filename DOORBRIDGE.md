@@ -14,6 +14,7 @@ PR itself is no longer carried. The source scheme is `unifi:`.
 | pending (rework of #2340 along the maintainer review, co-authored with Michał Papierski), branches `feat/unifi-talkback`, `feat/unifi-talkback-opus`, `feat/unifi-talkback-codecs`, `test/unifi-talkback-coverage-v2` | UniFi Protect talkback source `unifi:` (`pkg/unifi`, `internal/unifi`): G.711 by default, Opus with `#audio=opus`, AAC and Vorbis sessions, tests for Protect errors and the talkback lifecycle |
 | pending, not yet opened | `GetCompleteAnswer`: buffered channel and non-blocking send, so a renegotiation on the same connection no longer hangs (since pion/webrtc v4.2.25 the end-of-gathering candidate fires again; `TestRenegotiationBackchannel`) |
 | pending, not yet opened | Test build fix after #2685: `pkg/webrtc/keyframe_test.go` uses the new `readRTCP(*webrtc.RTPSender)` signature with a real sender, `pkg/rtsp/keyframe_test.go` uses `setTimeout(t, 5s)`, the `TestMissedControl` server goroutine in `pkg/rtsp/client_test.go` returns on read errors (upstream master does not build the tests of `pkg/webrtc` and `pkg/rtsp`) |
+| pending, not yet opened | `TestString` in `pkg/creds/secrets_test.go` expects `://***@` (the whole userinfo masked as one, upstream behaviour since `de157eb`) instead of the stale `://***:***@` (upstream master fails this test) |
 | pending, not yet opened | `TestReadRTCPResetsErrorsAfterRead` in `pkg/webrtc/keyframe_test.go`: a successful RTCP read resets the error count of the read loop |
 
 Merged upstream and no longer carried as fork changes:
