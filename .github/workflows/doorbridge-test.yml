@@ -1,7 +1,8 @@
 name: Doorbridge tests
 
-# Runs the WebRTC tests on pull requests against doorbridge and on pushes to
-# doorbridge. Builds no images and pushes nothing (release.yml does that, on
+# Runs the tests of every package the fork changes or that the UniFi talkback,
+# keyframe and TURN code depends on, on pull requests against doorbridge and
+# on pushes to doorbridge. Builds no images and pushes nothing (release.yml does that, on
 # schedule or by hand only). The 386 job covers the 32-bit platforms upstream
 # builds (386, arm/v6, arm/v7, mipsle), where int arithmetic overflows earlier.
 on:
@@ -20,7 +21,7 @@ concurrency:
 
 jobs:
   webrtc:
-    name: WebRTC tests (${{ matrix.goarch }})
+    name: Doorbridge tests (${{ matrix.goarch }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -28,9 +29,16 @@ jobs:
         include:
           - goarch: amd64
             flags: -race -count=3
+            # Upstream data race in the RTSP backchannel: Conn.Stop
+            # (producer.go) writes c.state under stateMu, Conn.Handle (conn.go)
+            # reads it without the lock. Both files are unchanged from upstream.
+            # These two tests fail under -race; they run without -race in the
+            # step "RTSP backchannel tests without -race" below.
+            rtsp_skip: -skip '^(TestBackchannelFallback|TestBackchannelSeparateSession)$'
           # The race detector is not available on 386; amd64 covers it.
           - goarch: "386"
             flags: -count=1
+            rtsp_skip: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -40,10 +48,36 @@ jobs:
       # shared with other workflows on the same ref.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version-file: go.mod
+          # Test with the toolchain the image is built with (GO_VERSION in
+          # docker/Dockerfile, upstream build.yml uses the same), not the go.mod
+          # minimum 1.26.0: with Go 1.26.0, pkg/rtsp TestURLParse never returns
+          # (urlParse recurses on rtsp://::ffff:192.168.1.123/..., see DOORBRIDGE.md).
+          go-version: "1.27"
           cache: false
 
       - name: go test
         env:
           GOARCH: ${{ matrix.goarch }}
-        run: go test ${{ matrix.flags }} ./pkg/webrtc/... ./internal/webrtc/...
+        run: >-
+          go test ${{ matrix.flags }}
+          ./pkg/webrtc/... ./internal/webrtc/...
+          ./pkg/creds/... ./pkg/tcp/... ./internal/streams/...
+          ./pkg/unifi/... ./internal/unifi/... ./internal/rtsp/...
+
+      - name: go test pkg/rtsp
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go test ${{ matrix.flags }} ${{ matrix.rtsp_skip }} ./pkg/rtsp/...
+
+      - name: RTSP backchannel tests without -race
+        if: matrix.goarch == 'amd64'
+        run: go test -count=3 -run '^(TestBackchannelFallback|TestBackchannelSeparateSession)$' ./pkg/rtsp/
+
+      # pkg/core/core_test.go does not build on upstream master (TestStripUserinfo
+      # calls StripUserinfo, which no longer exists). Run every other test file of
+      # the package, including node_test.go for the keyframe chain. Drop the file
+      # filter once upstream fixes core_test.go.
+      - name: go test pkg/core (without core_test.go)
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go test ${{ matrix.flags }} $(find pkg/core -maxdepth 1 -name '*.go' ! -name core_test.go | sort)

@@ -10,8 +10,10 @@ cameras and doorbells) before that change is available in an upstream release.
 | Upstream PR | Purpose |
 |---|---|
 | [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
-| [AlexxIT/go2rtc#2685](https://github.com/AlexxIT/go2rtc/pull/2685) | Request a source keyframe when a WebRTC viewer sends PLI/FIR (`#keyframe=resetup`), reworked version on top of upstream `bdf7eee` |
 | pending, not yet opened | `GetCompleteAnswer`: buffered channel and non-blocking send, so a renegotiation on the same connection no longer hangs (since pion/webrtc v4.2.25 the end-of-gathering candidate fires again; `TestRenegotiationBackchannel`) |
+| pending, not yet opened | Test build fix after #2685: `pkg/webrtc/keyframe_test.go` uses the new `readRTCP(*webrtc.RTPSender)` signature with a real sender, `pkg/rtsp/keyframe_test.go` uses `setTimeout(t, 5s)`, the `TestMissedControl` server goroutine in `pkg/rtsp/client_test.go` returns on read errors (upstream master does not build the tests of `pkg/webrtc` and `pkg/rtsp`) |
+| pending, not yet opened | `TestReadRTCPResetsErrorsAfterRead` in `pkg/webrtc/keyframe_test.go`: a successful RTCP read resets the error count of the read loop |
+| pending, not yet opened | UniFi talkback tests (`*_test.go` in `pkg/unifi` and `internal/unifi`): Protect API failures, codec mapping, talkback lifecycle, and the dependencies the backchannel relies on (masking in `internal/streams`, `pkg/creds`) |
 
 Merged upstream and no longer carried as fork changes:
 
@@ -21,6 +23,7 @@ Merged upstream and no longer carried as fork changes:
 | [AlexxIT/go2rtc#2684](https://github.com/AlexxIT/go2rtc/pull/2684) | NACK retransmission limiter (formerly fork PR #4) |
 | [AlexxIT/go2rtc#2700](https://github.com/AlexxIT/go2rtc/pull/2700) | Bound the TLS handshake by the dial timeout in `pkg/tcp` |
 | [AlexxIT/go2rtc#2702](https://github.com/AlexxIT/go2rtc/pull/2702) | Limit the number of RTSP redirects |
+| [AlexxIT/go2rtc#2685](https://github.com/AlexxIT/go2rtc/pull/2685) | Request a source keyframe when a WebRTC viewer sends PLI/FIR (`#keyframe=resetup`); upstream since `5101be5`, together with the refactor `41e5637` |
 
 ## Fork additions
 
@@ -30,7 +33,6 @@ Changes that exist only in this fork.
 |---|---|
 | Content-Length checks in `pkg/tcp` | A negative or huge `Content-Length` in an RTSP message is rejected instead of panicking or allocating gigabytes (the TLS handshake deadline is upstream since PR 2700) |
 | Short-lived TURN credentials for browsers | `GET /api/webrtc/ice` hands browsers ICE servers with time-limited TURN credentials, so a coturn shared secret never reaches the page |
-| Test fix in `pkg/rtsp/client_test.go` | The `TestMissedControl` server goroutine returns on read errors; otherwise it fails after the test ended and panics the package run (also on plain upstream with `-count=5`) |
 
 ### TURN credentials for the browser
 
@@ -98,7 +100,8 @@ streams:
   doorbell: rtspx://protect-host:7441/camera-token#keyframe=resetup
 ```
 
-Carried from upstream PR 2685. The RTCP read loop of the WebRTC senders (upstream PR 2486) passes PLI/FIR
+Upstream since `5101be5` (PR 2685 plus the refactor `41e5637`); the fork carries no keyframe changes of
+its own any more, the production files are identical to `upstream/master`. The RTCP read loop of the WebRTC senders (upstream PR 2486) passes PLI/FIR
 along the track chain in `pkg/core` to the source of that track. An RTSP video track with the option
 opens a short helper session (DESCRIBE, SETUP video, TEARDOWN, no PLAY) on its own connection: at
 most one at a time and one per second, every request with the usual timeout, failures only at trace level. WebSocket
@@ -158,9 +161,26 @@ Consumers should pin the `doorbridge-<sha7>` tag.
 
 ## Pull request tests
 
-`doorbridge-test.yml` runs the WebRTC tests (`pkg/webrtc`, `internal/webrtc`) on pull requests
-against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386` for the
-32-bit platforms upstream builds. It builds no images, pushes nothing and uses no Go cache.
+`doorbridge-test.yml` runs the tests of every package the fork changes or that the talkback,
+keyframe and TURN code depends on (`pkg/webrtc`, `internal/webrtc`, `pkg/rtsp`, `pkg/core`,
+`pkg/creds`, `pkg/tcp`, `internal/streams`, `pkg/unifi`, `internal/unifi`, `internal/rtsp`) on pull
+requests against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386`
+for the 32-bit platforms upstream builds. It builds no images, pushes nothing and uses no Go cache.
+
+Two upstream problems are handled explicitly, not hidden:
+
+- `TestBackchannelFallback` and `TestBackchannelSeparateSession` (`pkg/rtsp`) hit an upstream data
+  race (`Conn.Stop` writes `c.state` under the lock, `Conn.Handle` reads it without). They are skipped
+  in the race run and run in a separate step without `-race`.
+- `pkg/core/core_test.go` does not build on upstream master (`StripUserinfo` no longer exists). The
+  package runs with all other test files, including `node_test.go` for the keyframe chain.
+
+Both `doorbridge-test.yml` and `upstream-check.yml` test with Go 1.27, the toolchain the image is
+built with (`GO_VERSION` in `docker/Dockerfile`), not the `go.mod` minimum 1.26.0. With Go 1.26.0,
+`urlParse` in `pkg/rtsp/helpers.go` (unchanged from upstream) recurses forever on a URL such as
+`rtsp://::ffff:192.168.1.123/...`: `url.Parse` keeps reporting an invalid port "after host", and every
+retry inserts another `:`. `TestURLParse` then never returns. Go 1.27 parses the retried URL, so the
+image is not affected; a binary built with Go 1.26 is.
 
 ## Exit condition
 
