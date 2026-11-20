@@ -3,6 +3,7 @@ package unifi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -64,7 +65,10 @@ func TestTalkbackSessionUnreachable(t *testing.T) {
 
 	p.Close()
 	writeRTP(track)
-	require.ErrorContains(t, recv(t, done), "connection refused")
+	// "connection refused" or a closed keep-alive connection, but always the transport error of the POST
+	var urlErr *url.Error
+	require.ErrorAs(t, recv(t, done), &urlErr)
+	require.Equal(t, "Post", urlErr.Op)
 	require.Nil(t, bc.session)
 }
 

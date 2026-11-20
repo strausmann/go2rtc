@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/creds"
@@ -57,6 +58,9 @@ func newClient(insecure bool) *http.Client {
 
 // timeout - for each Protect API request
 var timeout = core.ConnDialTimeout
+
+// retryDelay - minimum time of one talkback attempt
+var retryDelay = 5 * time.Second
 
 type Session struct {
 	URL          string `json:"url"`
@@ -179,6 +183,14 @@ func (c *Client) Start() error {
 		return nil
 	}
 
+	// streams reconnects at once after Start, so a failing talkback would POST at microphone packet rate
+	defer func(ts time.Time) {
+		select {
+		case <-time.After(retryDelay - time.Since(ts)):
+		case <-c.ctx.Done():
+		}
+	}(time.Now())
+
 	var session Session
 	if err := c.request("POST", "/talkback-session", &session); err != nil {
 		return err
@@ -186,8 +198,6 @@ func (c *Client) Start() error {
 	if err := session.validate(); err != nil {
 		return err
 	}
-
-	creds.AddSecret(session.URL)
 
 	c.mu.Lock()
 	media, codec := c.media, c.codec
