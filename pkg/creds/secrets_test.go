@@ -9,20 +9,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStringOverlappingSecrets(t *testing.T) {
+	// secrets are process-wide, restore them for other tests
+	secretsMu.Lock()
+	saved := secrets
+	secrets = nil
+	secretsReplacer = nil
+	secretsMu.Unlock()
+	t.Cleanup(func() {
+		secretsMu.Lock()
+		secrets = saved
+		secretsReplacer = nil
+		secretsMu.Unlock()
+	})
+
+	// the shorter secret is added first, without sorting it would be replaced first
+	AddSecret("secret")
+	AddSecret("secret-token")
+
+	s := SecretString("http://192.168.1.123/api?key=secret-token")
+	require.Equal(t, "http://192.168.1.123/api?key=***", s)
+}
+
 func TestString(t *testing.T) {
 	AddSecret("admin")
 	AddSecret("pa$$word")
 
 	s := SecretString("rtsp://admin:pa$$word@192.168.1.123/stream1")
-	require.Equal(t, "rtsp://***:***@192.168.1.123/stream1", s)
-}
-
-func TestStringOverlappingSecrets(t *testing.T) {
-	AddSecret("rtp://127.0.0.1:6500")
-	AddSecret("rtp://127.0.0.1:6500/talkback?token=secret")
-
-	s := SecretString(`{"url":"rtp://127.0.0.1:6500/talkback?token=secret"}`)
-	require.Equal(t, `{"url":"***"}`, s)
+	// since upstream de157eb the whole userinfo is replaced by a single ***
+	require.Equal(t, "rtsp://***@192.168.1.123/stream1", s)
 }
 
 type recordWriter struct {
@@ -45,7 +60,7 @@ func TestSecretWriterSingleWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// zerolog expects exactly one complete event per Write call
-	require.Equal(t, []string{`{"level":"info","message":"url rtsp://***:***@host/stream token *** end"}` + "\n"}, rec.writes)
+	require.Equal(t, []string{`{"level":"info","message":"url rtsp://***@host/stream token *** end"}` + "\n"}, rec.writes)
 	require.Equal(t, len(line), n)
 }
 

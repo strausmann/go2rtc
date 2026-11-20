@@ -35,13 +35,13 @@ func getReplacer() *strings.Replacer {
 	defer secretsMu.Unlock()
 
 	if secretsReplacer == nil {
-		values := slices.Clone(secrets)
-		slices.SortFunc(values, func(a, b string) int {
+		// longest first, so a secret that contains another secret is masked as a whole
+		slices.SortFunc(secrets, func(a, b string) int {
 			return len(b) - len(a)
 		})
 
-		oldnew := make([]string, 0, 2*len(values))
-		for _, s := range values {
+		oldnew := make([]string, 0, 2*len(secrets))
+		for _, s := range secrets {
 			oldnew = append(oldnew, s, "***")
 		}
 		secretsReplacer = strings.NewReplacer(oldnew...)
@@ -64,7 +64,7 @@ const (
 
 func SecretString(s string) string {
 	re := getReplacer()
-	s = secretUserinfo(s)
+	s = userinfoRegexp.ReplaceAllString(s, `://***@`)
 	return re.Replace(s)
 }
 
@@ -72,16 +72,6 @@ func SecretWrite(w io.Writer, s string) (n int, err error) {
 	// Replacer.WriteString issues several partial writes on each replacement,
 	// but consumers (zerolog, HTTP) expect the whole masked output at once.
 	return io.WriteString(w, SecretString(s))
-}
-
-func secretUserinfo(s string) string {
-	return userinfoRegexp.ReplaceAllStringFunc(s, func(match string) string {
-		userinfo := match[3 : len(match)-1]
-		if strings.Contains(userinfo, ":") {
-			return `://***:***@`
-		}
-		return `://***@`
-	})
 }
 
 func SecretWriter(w io.Writer) io.Writer {

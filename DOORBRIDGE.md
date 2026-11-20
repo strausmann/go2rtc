@@ -1,19 +1,21 @@
 # Doorbridge fork
 
 This fork of [AlexxIT/go2rtc](https://github.com/AlexxIT/go2rtc) exists for one reason: it carries
-the UniFi Protect talkback source from upstream pull request
-[AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) (Opus talkback to UniFi Protect
-cameras and doorbells) before that change is available in an upstream release.
+a UniFi Protect talkback source (microphone to UniFi Protect cameras and doorbells) before such a
+source is available in an upstream release. The source is a rework of upstream pull request
+[AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) along the maintainer review; the
+PR itself is no longer carried. The source scheme is `unifi:`.
 
 ## Carried upstream pull requests
 
 | Upstream PR | Purpose |
 |---|---|
-| [AlexxIT/go2rtc#2340](https://github.com/AlexxIT/go2rtc/pull/2340) | UniFi Protect Opus talkback source |
+| pending (rework of #2340 along the maintainer review, co-authored with Michał Papierski), branch `fix/creds-longest-secret-first` | `pkg/creds`: mask overlapping secrets as a whole (longest first) |
+| pending (rework of #2340 along the maintainer review, co-authored with Michał Papierski), branches `feat/unifi-talkback`, `feat/unifi-talkback-opus`, `feat/unifi-talkback-codecs`, `test/unifi-talkback-coverage-v2` | UniFi Protect talkback source `unifi:` (`pkg/unifi`, `internal/unifi`): G.711 by default, Opus with `#audio=opus`, AAC and Vorbis sessions, tests for Protect errors and the talkback lifecycle |
 | pending, not yet opened | `GetCompleteAnswer`: buffered channel and non-blocking send, so a renegotiation on the same connection no longer hangs (since pion/webrtc v4.2.25 the end-of-gathering candidate fires again; `TestRenegotiationBackchannel`) |
 | pending, not yet opened | Test build fix after #2685: `pkg/webrtc/keyframe_test.go` uses the new `readRTCP(*webrtc.RTPSender)` signature with a real sender, `pkg/rtsp/keyframe_test.go` uses `setTimeout(t, 5s)`, the `TestMissedControl` server goroutine in `pkg/rtsp/client_test.go` returns on read errors (upstream master does not build the tests of `pkg/webrtc` and `pkg/rtsp`) |
+| pending, not yet opened | `TestString` in `pkg/creds/secrets_test.go` expects `://***@` (the whole userinfo masked as one, upstream behaviour since `de157eb`) instead of the stale `://***:***@` (upstream master fails this test) |
 | pending, not yet opened | `TestReadRTCPResetsErrorsAfterRead` in `pkg/webrtc/keyframe_test.go`: a successful RTCP read resets the error count of the read loop |
-| pending, not yet opened | UniFi talkback tests (`*_test.go` in `pkg/unifi` and `internal/unifi`): Protect API failures, codec mapping, talkback lifecycle, and the dependencies the backchannel relies on (masking in `internal/streams`, `pkg/creds`) |
 
 Merged upstream and no longer carried as fork changes:
 
@@ -33,6 +35,8 @@ Changes that exist only in this fork.
 |---|---|
 | Content-Length checks in `pkg/tcp` | A negative or huge `Content-Length` in an RTSP message is rejected instead of panicking or allocating gigabytes (the TLS handshake deadline is upstream since PR 2700) |
 | Short-lived TURN credentials for browsers | `GET /api/webrtc/ice` hands browsers ICE servers with time-limited TURN credentials, so a coturn shared secret never reaches the page |
+| Microphone test page `www/webrtc-mic.html` | Fetches TURN servers from `api/webrtc/ice` like `webrtc.html` (STUN fallback after 2 s) and adds the video transceiver before the audio one, so the talkback page works behind restrictive networks |
+| Single write in `pkg/creds` | Masked output is written in one `Write` call and the writers return `len(b)`, so zerolog's ConsoleWriter no longer drops masked log lines |
 
 ### TURN credentials for the browser
 
@@ -64,7 +68,7 @@ api:
 **Behaviour.** `GET /api/webrtc/ice` returns `{"ice_servers": [...]}`: the configured
 `webrtc.ice_servers` first, then one TURN entry with fresh credentials. Other methods get `405`;
 the response is `Cache-Control: no-store`; the secret is neither logged nor part of the response.
-`www/webrtc.html`, `www/webrtc-sync.html` and `www/video-rtc.js` fetch the route before they create
+`www/webrtc.html`, `www/webrtc-mic.html`, `www/webrtc-sync.html` and `www/video-rtc.js` fetch the route before they create
 the `RTCPeerConnection` and fall back to the built-in STUN servers on any error or after 2 s.
 
 **Limits.**
@@ -113,7 +117,7 @@ encoder to at most one per second. **Rollback:** remove `#keyframe=resetup`.
 | Branch | Purpose |
 |---|---|
 | `master` | Pure mirror of `upstream/master`. Never carries fork commits. Updated only by force-pushing upstream's tip. |
-| `doorbridge` | Default branch. `master` plus the PR #2340 merge and the helper scripts in `scripts/doorbridge/`. All images are built from here. |
+| `doorbridge` | Default branch. `master` plus the carried changes above, the fork additions and the helper scripts in `scripts/doorbridge/`. All images are built from here. |
 
 `doorbridge` is the default branch because GitHub runs scheduled workflows only from the default
 branch. Upstream's own `build.yml` is disabled in this fork so that nothing is built from `master`.
@@ -184,7 +188,7 @@ image is not affected; a binary built with Go 1.26 is.
 
 ## Exit condition
 
-This fork is temporary. Once the talkback source from PR #2340 (or an equivalent) is part of an
+This fork is temporary. Once the UniFi talkback source (the rework of PR #2340, or an equivalent) is part of an
 upstream go2rtc release, switch consumers to the upstream image and archive this fork.
 
 ## Security of the upstream check
