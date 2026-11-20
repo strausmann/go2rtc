@@ -25,6 +25,16 @@ func TestBackchannelCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, cmd, " -f mulaw -ar 8000 ")
 	require.Contains(t, cmd, "#audio=mulaw/8000")
+
+	session = &unifi.Session{URL: "udp://192.168.1.1:7004", Codec: "aac", SamplingRate: 16000}
+	cmd, err = backchannelCommand("ffmpeg", session, &core.Codec{Name: core.CodecPCMA})
+	require.NoError(t, err)
+	require.Contains(t, cmd, " -c:a aac -ar:a 16000 -ac:a 1 -f adts udp://192.168.1.1:7004#")
+
+	session = &unifi.Session{URL: "tcp://192.168.1.1:7004", Codec: "vorbis", SamplingRate: 16000}
+	cmd, err = backchannelCommand("ffmpeg", session, &core.Codec{Name: core.CodecPCMA})
+	require.NoError(t, err)
+	require.Contains(t, cmd, " -c:a libvorbis -ar:a 16000 -ac:a 1 -f ogg tcp://192.168.1.1:7004#")
 }
 
 func TestTalkbackURL(t *testing.T) {
@@ -54,9 +64,12 @@ func TestBackchannelCommandErrors(t *testing.T) {
 		codec   *core.Codec
 		err     string
 	}{
-		{unifi.Session{URL: "rtp://192.168.1.1:7004", Codec: "aac"}, pcma, "unifi: unsupported talkback codec: aac"},
+		{unifi.Session{URL: "rtp://192.168.1.1:7004", Codec: "flac"}, pcma, "unifi: unsupported talkback codec: flac"},
 		{unifi.Session{URL: "rtp://192.168.1.1:7004", Codec: "opus"}, &core.Codec{Name: core.CodecG722}, "unifi: unsupported microphone codec: G722"},
-		{unifi.Session{URL: "udp://192.168.1.1:7004", Codec: "opus"}, pcma, "unifi: unsupported talkback url"},
+		{unifi.Session{URL: "/tmp/file.ogg", Codec: "vorbis"}, pcma, "unifi: unsupported talkback url"},
+		{unifi.Session{URL: "file:///tmp/file.aac", Codec: "aac"}, pcma, "unifi: unsupported talkback url"},
+		{unifi.Session{URL: "tcp://0.0.0.0:7004?listen=1", Codec: "aac"}, pcma, "unifi: unsupported talkback url"},
+		{unifi.Session{URL: "udp://192.168.1.1:7004?localaddr=192.168.1.2", Codec: "vorbis"}, pcma, "unifi: unsupported talkback url"},
 		{unifi.Session{URL: "rtp://192.168.1.1:7004 -y /tmp/file", Codec: "opus"}, pcma, "unifi: unsupported talkback url"},
 		{unifi.Session{URL: "rtp://192.168.1.1:7004#backchannel=0", Codec: "opus"}, pcma, "unifi: unsupported talkback url"},
 		{unifi.Session{URL: "rtp://192.168.1.1:7004?listen=1", Codec: "opus"}, pcma, "unifi: unsupported talkback url"},

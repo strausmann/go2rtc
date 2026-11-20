@@ -77,7 +77,15 @@ func backchannelCommand(bin string, session *unifi.Session, codec *core.Codec) (
 		return "", err
 	}
 
-	if !strings.EqualFold(session.Codec, "opus") {
+	var encoder, format string
+	switch strings.ToLower(session.Codec) {
+	case "opus":
+		encoder, format = "libopus -application:a lowdelay", "rtp"
+	case "aac":
+		encoder, format = "aac", "adts"
+	case "vorbis":
+		encoder, format = "libvorbis", "ogg"
+	default:
 		return "", errors.New("unifi: unsupported talkback codec: " + session.Codec)
 	}
 
@@ -96,7 +104,7 @@ func backchannelCommand(bin string, session *unifi.Session, codec *core.Codec) (
 	rate := strconv.Itoa(session.SamplingRate)
 
 	return "exec:" + bin + " -hide_banner -v error -fflags nobuffer " + input +
-		" -c:a libopus -application:a lowdelay -ar:a " + rate + " -ac:a 1 -f rtp " + output +
+		" -c:a " + encoder + " -ar:a " + rate + " -ac:a 1 -f " + format + " " + output +
 		"#backchannel=1#audio=" + audio, nil
 }
 
@@ -104,7 +112,7 @@ func backchannelCommand(bin string, session *unifi.Session, codec *core.Codec) (
 // so the URL is rebuilt from scheme, host and port only
 func talkbackURL(s string) (string, error) {
 	u, err := url.Parse(s)
-	if err != nil || u.Scheme != "rtp" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
+	if err != nil || (u.Scheme != "rtp" && u.Scheme != "udp" && u.Scheme != "tcp") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
 		return "", errors.New("unifi: unsupported talkback url")
 	}
 

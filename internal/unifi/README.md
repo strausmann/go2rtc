@@ -6,7 +6,7 @@ The source only adds the audio backchannel. Video and audio from the camera come
 
 - create an API key for the UniFi Protect integration API
 - get the camera ID: `curl -sk -H "X-API-KEY: <api_key>" https://192.168.1.1/proxy/protect/integration/v1/cameras`
-- requires FFmpeg with `libopus` and the [`exec`](../exec/README.md) module
+- requires FFmpeg with `libopus` (and `libvorbis` for Vorbis sessions) and the [`exec`](../exec/README.md) module
 - FFmpeg path is taken from the [`ffmpeg`](../ffmpeg/README.md) module config (`ffmpeg: bin:`), if you use `exec: allow_paths:`, add this path there
 
 ## Configuration
@@ -20,7 +20,7 @@ streams:
 
 The talkback session is opened only when a client starts sending microphone audio. Normal viewing does not activate the camera speaker.
 
-FFmpeg transcodes the microphone to Opus with the sample rate requested by Protect (24 kHz for G4 Doorbell Pro).
+FFmpeg transcodes the microphone to the codec and sample rate requested by Protect: Opus over RTP (24 kHz for G4 Doorbell Pro), AAC (ADTS) or Vorbis (Ogg).
 
 ## Microphone codec
 
