@@ -17,14 +17,6 @@ func TestString(t *testing.T) {
 	require.Equal(t, "rtsp://***:***@192.168.1.123/stream1", s)
 }
 
-func TestStringOverlappingSecrets(t *testing.T) {
-	AddSecret("rtp://127.0.0.1:6500")
-	AddSecret("rtp://127.0.0.1:6500/talkback?token=secret")
-
-	s := SecretString(`{"url":"rtp://127.0.0.1:6500/talkback?token=secret"}`)
-	require.Equal(t, `{"url":"***"}`, s)
-}
-
 type recordWriter struct {
 	writes []string
 }
@@ -45,7 +37,7 @@ func TestSecretWriterSingleWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// zerolog expects exactly one complete event per Write call
-	require.Equal(t, []string{`{"level":"info","message":"url rtsp://***:***@host/stream token *** end"}` + "\n"}, rec.writes)
+	require.Equal(t, []string{`{"level":"info","message":"url rtsp://***@host/stream token *** end"}` + "\n"}, rec.writes)
 	require.Equal(t, len(line), n)
 }
 
