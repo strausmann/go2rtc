@@ -247,6 +247,19 @@ func TestTalkbackSessionErrors(t *testing.T) {
 	}
 }
 
+func TestDialAudioParam(t *testing.T) {
+	p := newProtect(t)
+
+	client, err := Dial(p.source() + "#audio=opus")
+	require.NoError(t, err)
+	require.Equal(t, []*core.Codec{
+		{Name: core.CodecOpus, ClockRate: 48000, Channels: 2},
+	}, client.Medias[0].Codecs)
+
+	_, err = Dial(p.source() + "#audio=aac")
+	require.EqualError(t, err, "unifi: unsupported params: #audio=aac")
+}
+
 func TestRequestDoesNotFollowRedirect(t *testing.T) {
 	var leaked atomic.Int32
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

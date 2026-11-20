@@ -20,4 +20,17 @@ streams:
 
 The talkback session is opened only when a client starts sending microphone audio. Normal viewing does not activate the camera speaker.
 
-go2rtc receives the microphone as PCMA or PCMU (G.711) and FFmpeg transcodes it to Opus with the sample rate requested by Protect (24 kHz for G4 Doorbell Pro).
+FFmpeg transcodes the microphone to Opus with the sample rate requested by Protect (24 kHz for G4 Doorbell Pro).
+
+## Microphone codec
+
+By default, the source takes the microphone as PCMA or PCMU (G.711). This is phone quality (8 kHz), but it works with every client.
+
+With `#audio=opus` the source takes the microphone as Opus. This sounds much better, but the client must send Opus (WebRTC clients do).
+
+```yaml
+streams:
+  doorbell:
+    - rtspx://192.168.1.1:7441/<alias>#backchannel=0
+    - unifi:https://192.168.1.1?camera_id=<camera_id>&api_key=<api_key>#audio=opus
+```

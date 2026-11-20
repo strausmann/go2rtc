@@ -78,6 +78,20 @@ func Dial(rawURL string) (*Client, error) {
 
 	creds.AddSecret(apiKey)
 
+	// G.711 by default, `#audio=opus` for better quality
+	var codecs []*core.Codec
+	switch u.Fragment {
+	case "":
+		codecs = []*core.Codec{
+			{Name: core.CodecPCMA, ClockRate: 8000},
+			{Name: core.CodecPCMU, ClockRate: 8000},
+		}
+	case "audio=opus":
+		codecs = []*core.Codec{{Name: core.CodecOpus, ClockRate: 48000, Channels: 2}}
+	default:
+		return nil, errors.New("unifi: unsupported params: #" + u.Fragment)
+	}
+
 	u.RawQuery = ""
 	u.Fragment = ""
 
@@ -112,10 +126,7 @@ func Dial(rawURL string) (*Client, error) {
 			{
 				Kind:      core.KindAudio,
 				Direction: core.DirectionSendonly,
-				Codecs: []*core.Codec{
-					{Name: core.CodecPCMA, ClockRate: 8000},
-					{Name: core.CodecPCMU, ClockRate: 8000},
-				},
+				Codecs:    codecs,
 			},
 		}
 	}
