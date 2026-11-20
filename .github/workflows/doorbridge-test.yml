@@ -63,6 +63,7 @@ jobs:
           ./pkg/webrtc/... ./internal/webrtc/...
           ./pkg/creds/... ./pkg/tcp/... ./internal/streams/...
           ./pkg/unifi/... ./internal/unifi/... ./internal/rtsp/...
+          ./pkg/core/... ./internal/ffmpeg/... ./pkg/hap/...
 
       - name: go test pkg/rtsp
         env:
@@ -72,12 +73,3 @@ jobs:
       - name: RTSP backchannel tests without -race
         if: matrix.goarch == 'amd64'
         run: go test -count=3 -run '^(TestBackchannelFallback|TestBackchannelSeparateSession)$' ./pkg/rtsp/
-
-      # pkg/core/core_test.go does not build on upstream master (TestStripUserinfo
-      # calls StripUserinfo, which no longer exists). Run every other test file of
-      # the package, including node_test.go for the keyframe chain. Drop the file
-      # filter once upstream fixes core_test.go.
-      - name: go test pkg/core (without core_test.go)
-        env:
-          GOARCH: ${{ matrix.goarch }}
-        run: go test ${{ matrix.flags }} $(find pkg/core -maxdepth 1 -name '*.go' ! -name core_test.go | sort)

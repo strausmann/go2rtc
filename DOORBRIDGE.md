@@ -12,10 +12,15 @@ PR itself is no longer carried. The source scheme is `unifi:`.
 |---|---|
 | pending (rework of #2340 along the maintainer review, co-authored with Michał Papierski), branch `fix/creds-longest-secret-first` | `pkg/creds`: mask overlapping secrets as a whole (longest first) |
 | pending (rework of #2340 along the maintainer review, co-authored with Michał Papierski), branches `feat/unifi-talkback`, `feat/unifi-talkback-opus`, `feat/unifi-talkback-codecs`, `test/unifi-talkback-coverage-v2` | UniFi Protect talkback source `unifi:` (`pkg/unifi`, `internal/unifi`): G.711 by default, Opus with `#audio=opus`, AAC and Vorbis sessions, tests for Protect errors and the talkback lifecycle |
-| pending, not yet opened | `GetCompleteAnswer`: buffered channel and non-blocking send, so a renegotiation on the same connection no longer hangs (since pion/webrtc v4.2.25 the end-of-gathering candidate fires again; `TestRenegotiationBackchannel`) |
-| pending, not yet opened | Test build fix after #2685: `pkg/webrtc/keyframe_test.go` uses the new `readRTCP(*webrtc.RTPSender)` signature with a real sender, `pkg/rtsp/keyframe_test.go` uses `setTimeout(t, 5s)`, the `TestMissedControl` server goroutine in `pkg/rtsp/client_test.go` returns on read errors (upstream master does not build the tests of `pkg/webrtc` and `pkg/rtsp`) |
-| pending, not yet opened | `TestString` in `pkg/creds/secrets_test.go` expects `://***@` (the whole userinfo masked as one, upstream behaviour since `de157eb`) instead of the stale `://***:***@` (upstream master fails this test) |
-| pending, not yet opened | `TestReadRTCPResetsErrorsAfterRead` in `pkg/webrtc/keyframe_test.go`: a successful RTCP read resets the error count of the read loop |
+| pending, branch `fix/webrtc-complete-answer-handler` | `GetCompleteAnswer`: buffered channel and non-blocking send, so a renegotiation on the same connection no longer hangs (since pion/webrtc v4.2.25 the end-of-gathering candidate fires again; `TestRenegotiationBackchannel`) |
+| [AlexxIT/go2rtc#2709](https://github.com/AlexxIT/go2rtc/pull/2709) (open) | Test build fix after #2685: `pkg/webrtc/keyframe_test.go` uses the new `readRTCP(*webrtc.RTPSender)` signature with a real sender, `pkg/rtsp/keyframe_test.go` uses `setTimeout(t, 5s)`, the `TestMissedControl` server goroutine in `pkg/rtsp/client_test.go` returns on read errors (upstream master does not build the tests of `pkg/webrtc` and `pkg/rtsp`) |
+| pending, branch `test/core-build` | `pkg/core`: drop `TestStripUserinfo` from `core_test.go`, `StripUserinfo` moved to `creds.SecretString` in `de157eb` (upstream master does not build the tests of `pkg/core`); the case moved to the `pkg/creds` tests |
+| pending, branch `test/creds-string` | `pkg/creds` `TestString` expects `://***@` (the whole userinfo masked as one, upstream behaviour since `de157eb`) instead of the stale `://***:***@`, plus a query-string case for `AddSecret` and the former `pkg/core` userinfo case |
+| pending, branch `test/ffmpeg-args` | `internal/ffmpeg`: the dshow device cases run on Windows only (Linux builds `v4l2`, macOS `avfoundation`), and `TestVersion` restores `verAV`, so `-count>1` no longer leaks `-readrate_initial_burst` into other cases |
+| pending, branch `test/hap-camera-build` | `pkg/hap/camera`: tests use `SetupEndpointsRequest`/`SetupEndpointsResponse`, the device samples with a `00 00` list separator are decoded and re-encoded with the `0xFF` separator from `3b976c6` and compared after a round trip |
+| pending, branch `test/tlv8-video-codec` | `pkg/hap/tlv8` `TestVideoCodecParams` expects the `0xFF` list separator from `3b976c6` |
+| pending, branch `test/rtsp-missed-control` (depends on #2709) | `pkg/rtsp` `TestMissedControl` uses `setTimeout(t, 5s)` instead of a 1 ms global timeout and closes its client and listener |
+| [AlexxIT/go2rtc#2710](https://github.com/AlexxIT/go2rtc/pull/2710) (open) | `TestReadRTCPResetsErrorsAfterRead` in `pkg/webrtc/keyframe_test.go`: a successful RTCP read resets the error count of the read loop |
 
 Merged upstream and no longer carried as fork changes:
 
@@ -167,17 +172,18 @@ Consumers should pin the `doorbridge-<sha7>` tag.
 
 `doorbridge-test.yml` runs the tests of every package the fork changes or that the talkback,
 keyframe and TURN code depends on (`pkg/webrtc`, `internal/webrtc`, `pkg/rtsp`, `pkg/core`,
-`pkg/creds`, `pkg/tcp`, `internal/streams`, `pkg/unifi`, `internal/unifi`, `internal/rtsp`) on pull
+`pkg/creds`, `pkg/tcp`, `internal/streams`, `pkg/unifi`, `internal/unifi`, `internal/rtsp`), plus
+`internal/ffmpeg` and `pkg/hap` whose test fixes the fork carries, on pull
 requests against `doorbridge` and on pushes to it: on `amd64` with the race detector, and on `386`
 for the 32-bit platforms upstream builds. It builds no images, pushes nothing and uses no Go cache.
 
-Two upstream problems are handled explicitly, not hidden:
+One upstream problem is handled explicitly, not hidden:
 
 - `TestBackchannelFallback` and `TestBackchannelSeparateSession` (`pkg/rtsp`) hit an upstream data
   race (`Conn.Stop` writes `c.state` under the lock, `Conn.Handle` reads it without). They are skipped
   in the race run and run in a separate step without `-race`.
-- `pkg/core/core_test.go` does not build on upstream master (`StripUserinfo` no longer exists). The
-  package runs with all other test files, including `node_test.go` for the keyframe chain.
+
+`pkg/core` runs with all its test files, since the fork carries `test/core-build`.
 
 Both `doorbridge-test.yml` and `upstream-check.yml` test with Go 1.27, the toolchain the image is
 built with (`GO_VERSION` in `docker/Dockerfile`), not the `go.mod` minimum 1.26.0. With Go 1.26.0,
