@@ -64,7 +64,7 @@ api:
 **Behaviour.** `GET /api/webrtc/ice` returns `{"ice_servers": [...]}`: the configured
 `webrtc.ice_servers` first, then one TURN entry with fresh credentials. Other methods get `405`;
 the response is `Cache-Control: no-store`; the secret is neither logged nor part of the response.
-`www/webrtc.html`, `www/webrtc-sync.html` and `www/video-rtc.js` fetch the route before they create
+`www/webrtc.html`, `www/webrtc-mic.html`, `www/webrtc-sync.html` and `www/video-rtc.js` fetch the route before they create
 the `RTCPeerConnection` and fall back to the built-in STUN servers on any error or after 2 s.
 
 **Limits.**

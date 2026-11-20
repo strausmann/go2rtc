@@ -13,73 +13,104 @@
 <button id="microphone" disabled>Enable microphone</button>
 <video id="video" autoplay controls playsinline muted></video>
 <script>
-    const pc = new RTCPeerConnection({
-        iceServers: [{urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302']}],
-    });
-
-    const audio = pc.addTransceiver('audio', {direction: 'recvonly'});
-    const video = pc.addTransceiver('video', {direction: 'recvonly'});
-    document.getElementById('video').srcObject = new MediaStream([
-        video.receiver.track,
-        audio.receiver.track,
-    ]);
-
-    const url = new URL('api/ws' + location.search, location.href);
-    const ws = new WebSocket('ws' + url.toString().substring(4));
-    const button = document.getElementById('microphone');
-    let microphone = null;
-
-    async function sendOffer() {
-        button.disabled = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({type: 'webrtc/offer', value: pc.localDescription.sdp}));
+    // Short-lived TURN credentials come from the server; fall back to STUN only.
+    async function fetchIceServers(fallback) {
+        let timer;
+        let ctrl = null;
+        try {
+            // AbortController is missing on old browsers (e.g. iOS 11): still bound the wait to 2 s
+            ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+            const timeout = new Promise(resolve => {
+                timer = setTimeout(() => {
+                    if (ctrl) ctrl.abort();
+                    resolve(null);
+                }, 2000);
+            });
+            const load = (async () => {
+                const r = await fetch('api/webrtc/ice', {credentials: 'same-origin', signal: ctrl ? ctrl.signal : undefined});
+                return r.ok ? await r.json() : null;
+            })();
+            const data = await Promise.race([load, timeout]);
+            // only replace the fallback when the server adds TURN credentials
+            const hasTurn = data && Array.isArray(data.ice_servers) && data.ice_servers.some(s => s.credential);
+            return hasTurn ? data.ice_servers : fallback;
+        } catch (e) {
+            return fallback;
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
-    ws.addEventListener('open', () => {
-        pc.addEventListener('icecandidate', ev => {
-            if (ev.candidate) {
-                ws.send(JSON.stringify({type: 'webrtc/candidate', value: ev.candidate.candidate}));
+    async function main() {
+        const stun = [{urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302']}];
+        const pc = new RTCPeerConnection({iceServers: await fetchIceServers(stun)});
+
+        const video = pc.addTransceiver('video', {direction: 'recvonly'});
+        const audio = pc.addTransceiver('audio', {direction: 'recvonly'});
+        document.getElementById('video').srcObject = new MediaStream([
+            video.receiver.track,
+            audio.receiver.track,
+        ]);
+
+        const url = new URL('api/ws' + location.search, location.href);
+        const ws = new WebSocket('ws' + url.toString().substring(4));
+        const button = document.getElementById('microphone');
+        let microphone = null;
+
+        async function sendOffer() {
+            button.disabled = true;
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({type: 'webrtc/offer', value: pc.localDescription.sdp}));
+        }
+
+        ws.addEventListener('open', () => {
+            pc.addEventListener('icecandidate', ev => {
+                if (ev.candidate) {
+                    ws.send(JSON.stringify({type: 'webrtc/candidate', value: ev.candidate.candidate}));
+                }
+            });
+            sendOffer().catch(err => button.title = err.message);
+        });
+
+        ws.addEventListener('message', async ev => {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'webrtc/candidate') {
+                await pc.addIceCandidate({candidate: msg.value, sdpMid: '0'});
+            } else if (msg.type === 'webrtc/answer') {
+                await pc.setRemoteDescription({type: 'answer', sdp: msg.value});
+                button.disabled = false;
+                button.textContent = microphone ? 'Disable microphone' : 'Enable microphone';
+            } else if (msg.type === 'error') {
+                button.title = msg.value;
             }
         });
-        sendOffer().catch(err => button.title = err.message);
-    });
 
-    ws.addEventListener('message', async ev => {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'webrtc/candidate') {
-            await pc.addIceCandidate({candidate: msg.value, sdpMid: '0'});
-        } else if (msg.type === 'webrtc/answer') {
-            await pc.setRemoteDescription({type: 'answer', sdp: msg.value});
-            button.disabled = false;
-            button.textContent = microphone ? 'Disable microphone' : 'Enable microphone';
-        } else if (msg.type === 'error') {
-            button.title = msg.value;
-        }
-    });
-
-    button.addEventListener('click', async () => {
-        if (button.disabled) return;
-        button.disabled = true;
-        try {
-            if (microphone) {
-                await audio.sender.replaceTrack(null);
-                audio.direction = 'recvonly';
-                microphone.stop();
-                microphone = null;
-            } else {
-                const track = (await navigator.mediaDevices.getUserMedia({audio: true})).getAudioTracks()[0];
-                await audio.sender.replaceTrack(track);
-                audio.direction = 'sendrecv';
-                microphone = track;
+        button.addEventListener('click', async () => {
+            if (button.disabled) return;
+            button.disabled = true;
+            try {
+                if (microphone) {
+                    await audio.sender.replaceTrack(null);
+                    audio.direction = 'recvonly';
+                    microphone.stop();
+                    microphone = null;
+                } else {
+                    const track = (await navigator.mediaDevices.getUserMedia({audio: true})).getAudioTracks()[0];
+                    await audio.sender.replaceTrack(track);
+                    audio.direction = 'sendrecv';
+                    microphone = track;
+                }
+                button.textContent = microphone ? 'Disable microphone' : 'Enable microphone';
+                await sendOffer();
+            } catch (err) {
+                button.title = err.message;
+                button.disabled = false;
             }
-            button.textContent = microphone ? 'Disable microphone' : 'Enable microphone';
-            await sendOffer();
-        } catch (err) {
-            button.title = err.message;
-            button.disabled = false;
-        }
-    });
+        });
+    }
+
+    main();
 </script>
 </body>
 </html>
