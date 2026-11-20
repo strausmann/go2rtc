@@ -100,8 +100,15 @@ func (c *keyframeCamera) waitClosed(t *testing.T) {
 	}
 }
 
+// setTimeout sets the global Timeout, other tests of the package leave it very short
+func setTimeout(t *testing.T) {
+	old := Timeout
+	Timeout = 5 * time.Second
+	t.Cleanup(func() { Timeout = old })
+}
+
 func TestRequestKeyframe(t *testing.T) {
-	setTimeout(t, 5*time.Second)
+	setTimeout(t)
 	camera := newKeyframeCamera(t)
 
 	conn := NewClient(camera.uri)
@@ -136,7 +143,7 @@ func TestRequestKeyframe(t *testing.T) {
 
 // GetTrack sets the keyframe handler only for video and only with the option
 func TestGetTrackKeyframe(t *testing.T) {
-	setTimeout(t, 5*time.Second)
+	setTimeout(t)
 
 	for _, tc := range []struct {
 		keyframe string
@@ -181,7 +188,7 @@ func TestGetTrackKeyframe(t *testing.T) {
 }
 
 func TestRequestKeyframeError(t *testing.T) {
-	setTimeout(t, 5*time.Second)
+	setTimeout(t)
 	ln, err := net.Listen("tcp", "localhost:0")
 	require.Nil(t, err)
 	uri := "rtsp://" + ln.Addr().String() + "/stream"
@@ -221,7 +228,7 @@ func TestRequestKeyframeTimeout(t *testing.T) {
 
 // the main session followed a redirect, the helper uses the final location
 func TestRequestKeyframeAfterRedirect(t *testing.T) {
-	setTimeout(t, 5*time.Second)
+	setTimeout(t)
 
 	target := newKeyframeCamera(t)
 	camera := newKeyframeCamera(t)

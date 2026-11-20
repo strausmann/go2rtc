@@ -32,19 +32,13 @@ func TestMissedControl(t *testing.T) {
 	require.Nil(t, err)
 
 	go func() {
-		// this goroutine outlives the test: once the GC closes the abandoned
-		// client connection, Read fails, and require here would panic the run
 		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
+		require.Nil(t, err)
 
 		b := make([]byte, 8192)
 		for {
 			n, err := conn.Read(b)
-			if err != nil {
-				return
-			}
+			require.Nil(t, err)
 
 			req := string(b[:n])
 
