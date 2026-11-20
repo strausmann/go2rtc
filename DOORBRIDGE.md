@@ -192,6 +192,36 @@ built with (`GO_VERSION` in `docker/Dockerfile`), not the `go.mod` minimum 1.26.
 retry inserts another `:`. `TestURLParse` then never returns. Go 1.27 parses the retried URL, so the
 image is not affected; a binary built with Go 1.26 is.
 
+## PR test images
+
+`pr-test-image.yml` builds a test image for one upstream pull request so that others can try it
+without building anything. The image is AlexxIT/go2rtc `master` plus one branch (or commit chain) of
+this fork and nothing else: no TURN code, no other fork additions. It is **not an official release**.
+
+Start it by hand from the `doorbridge` branch (it refuses any other ref; it never runs on push or on
+a schedule):
+
+```bash
+gh workflow run pr-test-image.yml --repo strausmann/go2rtc --ref doorbridge \
+  -f ref=feat/unifi-talkback -f pr=2712          # optional: -f base=master
+```
+
+- `ref`: branch (or a commit reachable from a branch) of this fork. Not `doorbridge`.
+- `pr`: number of the upstream pull request, digits only.
+- `base`: upstream branch to build on, default `master`.
+
+If `ref` builds on `base` it is used as is, otherwise it is merged into `base`; a conflict aborts the
+run with a message. Tags (`linux/amd64`, `linux/arm64`, no `latest`, no `doorbridge-*`):
+
+- `ghcr.io/strausmann/go2rtc:pr<pr>-<refsha7>-<basesha7>` (immutable: short commits of `ref` and of the
+  upstream `base`; the run aborts if this tag already exists instead of overwriting it), and
+- `ghcr.io/strausmann/go2rtc:pr<pr>` (moving, the latest build for this pull request).
+
+The job summary lists tags, index digest, the commits on top of `base` and the base commit. Labels
+state the source, the revision and "Test build of AlexxIT/go2rtc#<pr>, not an official release".
+Pin the digest when reporting results. Source preparation (git only) and the build (the only job with
+`packages: write`) are separate jobs; the build uses no cache.
+
 ## Exit condition
 
 This fork is temporary. Once the UniFi talkback source (the rework of PR #2340, or an equivalent) is part of an
