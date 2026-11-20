@@ -11,7 +11,8 @@ name: PR test image
 #   - "build" holds the packages:write token. It receives the prepared source tree as
 #     data (artifact) and builds it; it never runs git on foreign refs.
 #
-# Tags: ghcr.io/<owner>/go2rtc:pr<pr>-<sha7 of ref> (immutable) and
+# Tags: ghcr.io/<owner>/go2rtc:pr<pr>-<ref sha7>-<base sha7> (immutable: ref AND base
+#       commit are part of the name; an existing tag is never overwritten) and
 #       ghcr.io/<owner>/go2rtc:pr<pr> (moving, latest build of this PR).
 # Not an official release. Never tagged latest or doorbridge-*.
 on:
@@ -50,6 +51,7 @@ jobs:
       sha: ${{ steps.src.outputs.sha }}
       sha7: ${{ steps.src.outputs.sha7 }}
       base_sha: ${{ steps.src.outputs.base_sha }}
+      base_sha7: ${{ steps.src.outputs.base_sha7 }}
       mode: ${{ steps.src.outputs.mode }}
     steps:
       # No checkout of this repository: nothing from it is needed or executed.
@@ -131,6 +133,7 @@ jobs:
             echo "sha=$sha"
             echo "sha7=$sha7"
             echo "base_sha=$base_sha"
+            echo "base_sha7=$(git rev-parse --short=7 "$base_sha")"
             echo "mode=$mode"
           } >> "$GITHUB_OUTPUT"
           echo "Source: $IN_BASE $base_sha + $sha ($count commits), $mode"
@@ -160,6 +163,7 @@ jobs:
       SHA7: ${{ needs.prepare.outputs.sha7 }}
       BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
       MODE: ${{ needs.prepare.outputs.mode }}
+      TAG: pr${{ needs.prepare.outputs.pr }}-${{ needs.prepare.outputs.sha7 }}-${{ needs.prepare.outputs.base_sha7 }}
     steps:
       # No checkout here either. The source tree is data from the prepare job.
       - name: Download source tree
@@ -180,6 +184,8 @@ jobs:
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || fail "invalid sha"
           [[ "$SHA7" =~ ^[0-9a-f]{7}$ ]] || fail "invalid sha7"
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "invalid base sha"
+          [[ "$TAG" =~ ^pr[0-9]{1,7}-[0-9a-f]{7}-[0-9a-f]{7}$ ]] || fail "invalid tag"
+          [ "${TAG##*-}" = "${BASE_SHA:0:7}" ] || fail "tag does not match base sha"
 
           mkdir -p "$CTX_DIR"
           tar -xzf "$IN_DIR/src.tar.gz" -C "$CTX_DIR" --no-same-owner --no-same-permissions
@@ -205,6 +211,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Refuse to overwrite an existing immutable tag
+        run: |
+          set -u
+          rc=0
+          out="$(docker buildx imagetools inspect "$IMAGE:$TAG" 2>&1)" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::$IMAGE:$TAG already exists; the immutable tag is never overwritten. Use a new ref commit or delete the tag deliberately."
+            exit 1
+          elif printf '%s' "$out" | grep -qi 'not found'; then
+            echo "Tag $IMAGE:$TAG does not exist yet."
+          else
+            # Anything else (auth, network, registry error) must not look like "missing".
+            echo "::error::imagetools inspect failed unexpectedly (exit $rc)"
+            printf '%s\n' "$out"
+            exit 1
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
@@ -222,7 +245,7 @@ jobs:
           provenance: mode=max
           sbom: true
           tags: |
-            ${{ env.IMAGE }}:pr${{ env.PR }}-${{ env.SHA7 }}
+            ${{ env.IMAGE }}:${{ env.TAG }}
             ${{ env.IMAGE }}:pr${{ env.PR }}
           labels: |
             org.opencontainers.image.title=go2rtc (test build of AlexxIT/go2rtc#${{ env.PR }})
@@ -230,7 +253,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.url=https://github.com/AlexxIT/go2rtc/pull/${{ env.PR }}
             org.opencontainers.image.revision=${{ env.SHA }}
-            org.opencontainers.image.version=pr${{ env.PR }}-${{ env.SHA7 }}
+            org.opencontainers.image.version=${{ env.TAG }}
             org.opencontainers.image.created=${{ steps.prep.outputs.created }}
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.vendor=projects@strausmann.ch
@@ -254,10 +277,10 @@ jobs:
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Tag (immutable) | \`$IMAGE:pr$PR-$SHA7\` |"
+            echo "| Tag (immutable) | \`$IMAGE:$TAG\` |"
             echo "| Tag (moving) | \`$IMAGE:pr$PR\` |"
             echo "| Index digest | \`$DIGEST\` |"
-            echo "| Pin | \`$IMAGE:pr$PR-$SHA7@$DIGEST\` |"
+            echo "| Pin | \`$IMAGE:$TAG@$DIGEST\` |"
             echo "| ref commit | [\`$SHA\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/$SHA) |"
             echo "| Base commit (AlexxIT/go2rtc) | [\`$BASE_SHA\`](https://github.com/AlexxIT/go2rtc/commit/$BASE_SHA) |"
             echo "| Combination | $MODE |"

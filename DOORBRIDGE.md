@@ -213,7 +213,8 @@ gh workflow run pr-test-image.yml --repo strausmann/go2rtc --ref doorbridge \
 If `ref` builds on `base` it is used as is, otherwise it is merged into `base`; a conflict aborts the
 run with a message. Tags (`linux/amd64`, `linux/arm64`, no `latest`, no `doorbridge-*`):
 
-- `ghcr.io/strausmann/go2rtc:pr<pr>-<sha7>` (immutable, `<sha7>` is the short commit of `ref`), and
+- `ghcr.io/strausmann/go2rtc:pr<pr>-<refsha7>-<basesha7>` (immutable: short commits of `ref` and of the
+  upstream `base`; the run aborts if this tag already exists instead of overwriting it), and
 - `ghcr.io/strausmann/go2rtc:pr<pr>` (moving, the latest build for this pull request).
 
 The job summary lists tags, index digest, the commits on top of `base` and the base commit. Labels
